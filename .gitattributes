@@ -1,0 +1,2 @@
+# strip outputs on commit/add for all notebooks
+*.ipynb filter=strip-nb
