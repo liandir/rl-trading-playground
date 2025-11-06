@@ -1,0 +1,17 @@
+[project]
+name = "multi-currency-trading"
+version = "0.1.0"
+description = "A multi-currency trading package."
+authors = [
+    { name = "Leander Olschowy", email = "leanderolschowy@gmail.com" }
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Repository = "https://github.com/liandir/multi-currency-trading"
