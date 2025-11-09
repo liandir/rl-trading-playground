@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from src.agent.buffer import Buffer
+from src.agent.utils import get_optimizer
 
 
 @dataclass
@@ -71,9 +72,9 @@ class VanillaDDPG:
     def store(self, state, action, next_state, reward, done):
         self.buffer.store(state, action, next_state, reward, done)
 
-    def update_optimizers(self, a_lr, q_lr, a_m, q_m):
-        self.a_optim = torch.optim.SGD(self.a.parameters(), lr=a_lr, momentum=a_m)
-        self.q_optim = torch.optim.SGD(self.q.parameters(), lr=q_lr, momentum=q_m)
+    def update_optimizers(self, a_lr, q_lr, optim = "AdamW", a_m = 0.0, q_m = 0.0):
+        self.a_optim = get_optimizer(self.a, a_lr, optim=optim, m=a_m)
+        self.q_optim = get_optimizer(self.q, q_lr, optim=optim, m=q_m)
 
     def update(self, batch_size: int):
         """
