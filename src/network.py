@@ -3,7 +3,7 @@ import torch
 
 class VanillaNetwork(torch.nn.Module):
 
-    def __init__(self, n_in, n_out, sizes=[], act=torch.tanh, out_act=lambda x: x, device="cpu"):
+    def __init__(self, n_in, n_out, sizes=[], act=torch.tanh, out_act=lambda x: x):
         super().__init__()
         self.n_in = n_in
         self.n_out = n_out
@@ -17,9 +17,6 @@ class VanillaNetwork(torch.nn.Module):
                 self.layers.append(torch.nn.Linear(sizes[i-1], sizes[i]))
         self.out = torch.nn.Linear(sizes[-1] if len(sizes) > 0 else n_in, n_out)
 
-        self.device = device
-        self.to(self.device)
-
     def forward(self, x):
         z = x.view(-1, self.n_in)
         for layer in self.layers:
@@ -32,8 +29,8 @@ class VanillaNetwork(torch.nn.Module):
 
 class VanillaQNetwork(VanillaNetwork):
 
-    def __init__(self, n_state, n_action, sizes=[], act=torch.tanh, out_act=lambda x: x, device="cpu"):
-        super().__init__(n_state + n_action, 1, sizes, act, out_act, device)
+    def __init__(self, n_state, n_action, sizes=[], act=torch.tanh, out_act=lambda x: x):
+        super().__init__(n_state + n_action, 1, sizes, act, out_act)
 
     def forward(self, x, a):
         xa = torch.cat([x, a], dim=-1)
@@ -43,7 +40,7 @@ class VanillaQNetwork(VanillaNetwork):
 
 class StochasticVanillaNetwork(torch.nn.Module):
 
-    def __init__(self, n_in, n_out, sizes=[], act=torch.tanh, device="cpu"):
+    def __init__(self, n_in, n_out, sizes=[], act=torch.tanh):
         super().__init__()
         self.n_in = n_in
         self.n_out = n_out
@@ -55,9 +52,6 @@ class StochasticVanillaNetwork(torch.nn.Module):
             self.layers.append(torch.nn.Linear(sizes[i-1], sizes[i]))
         self.mean = torch.nn.Linear(sizes[-1], n_out)
         self.log_std = torch.nn.Linear(sizes[-1], n_out)
-
-        self.device = device
-        self.to(self.device)
 
     def forward(self, x):
         z = x.view(-1, x.size(-1))
@@ -82,7 +76,7 @@ class StochasticVanillaNetwork(torch.nn.Module):
 
 class SquashedStochasticVanillaNetwork(torch.nn.Module):
 
-    def __init__(self, n_in, n_out, sizes=[], act=torch.tanh, device="cpu"):
+    def __init__(self, n_in, n_out, sizes=[], act=torch.tanh):
         super().__init__()
         self.n_in = n_in
         self.n_out = n_out
@@ -96,9 +90,6 @@ class SquashedStochasticVanillaNetwork(torch.nn.Module):
         self.log_std = torch.nn.Linear(sizes[-1], n_out)
 
         self.N_log_sqrt2pi = self.n_out * torch.tensor(2.0 * torch.pi).sqrt().log()
-
-        self.device = device
-        self.to(self.device)
 
     def forward(self, x):
         z = x.view(-1, x.size(-1))

@@ -17,6 +17,7 @@ class DDPGConfig:
     buffer_size: int = 10000
     action_low: float = -1.0
     action_high: float = 1.0
+    dtype: torch.dtype = torch.float32
     device: str = "cpu"
 
 
@@ -36,12 +37,13 @@ class VanillaDDPG:
         critic: nn.Module,
         config: DDPGConfig = DDPGConfig(),
     ):
-        self.a = actor.to(config.device)
-        self.q = critic.to(config.device)
-        self.a_t = copy.deepcopy(self.a).to(config.device).eval()
-        self.q_t = copy.deepcopy(self.q).to(config.device).eval()
+        self.a = actor.to(dtype=config.dtype, device=config.device)
+        self.q = critic.to(dtype=config.dtype, device=config.device)
+        self.a_t = copy.deepcopy(self.a).to(dtype=config.dtype, device=config.device).eval()
+        self.q_t = copy.deepcopy(self.q).to(dtype=config.dtype, device=config.device).eval()
 
         self.config = config
+        self.dtype  = config.dtype
         self.device = torch.device(config.device)
         self.buffer = Buffer(config.buffer_size)
 
@@ -50,13 +52,13 @@ class VanillaDDPG:
         self.hard_update(self.q_t, self.q)
 
     @torch.no_grad()
-    def act(self, state: np.ndarray, explore: bool = False) -> np.ndarray:
+    def act(self, state: torch.Tensor, explore: bool = False) -> torch.Tensor:
         """
         state: shape (state_dim,) or (1, state_dim)
         returns action in [action_low, action_high]
         """
         self.a.eval()
-        a = self.a(state)
+        a = self.a(state.to(dtype=self.dtype, device=self.device)).cpu()
         self.a.train()
 
         if explore:
@@ -77,15 +79,15 @@ class VanillaDDPG:
         Single DDPG update: critic step then actor step, followed by soft target updates.
         Returns a dict of scalars for logging.
         """
-        states, actions, next_states, rewards, dones = self.buffer.sample(batch_size, self.device)
+        (
+            states,
+            actions,
+            next_states,
+            rewards,
+            dones
+        ) = self.buffer.sample(batch_size, self.device, self.dtype)
 
-        states      = states.to(self.device)
-        actions     = actions.to(self.device)
-        next_states = next_states.to(self.device)
-        rewards     = rewards.to(self.device)
-        dones       = dones.to(self.device)
-
-        # ----- Critic update -----
+        # critic update
         with torch.no_grad():
             next_actions = self.a_t(next_states)
             target_q = self.q_t(next_states, next_actions)
@@ -98,7 +100,7 @@ class VanillaDDPG:
         critic_loss.backward()
         self.q_optim.step()
 
-        # ----- Actor update (deterministic policy gradient) -----
+        # actor update
         pi = self.a(states)
         actor_loss = -self.q(states, pi).mean()
 
@@ -106,7 +108,7 @@ class VanillaDDPG:
         actor_loss.backward()
         self.a_optim.step()
 
-        # ----- Soft target updates -----
+        # soft target updates
         self.soft_update(self.a_t, self.a, self.config.tau)
         self.soft_update(self.q_t, self.q, self.config.tau)
 

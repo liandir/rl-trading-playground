@@ -27,16 +27,15 @@ class Buffer:
             self.memory[self.idx] = transition
             self.idx = (self.idx + 1) % self.memory_size
 
-    def sample(self, batch_size: int, device: str | torch.device):
+    def sample(self, batch_size: int, device: str | torch.device, dtype: torch.dtype):
         """Sample random transitions as tensors on given device."""
         batch = random.sample(self.memory, batch_size)
-
         state, action, next_state, reward, done = zip(*batch)
 
-        state = torch.stack(state)
-        action = torch.stack(action)
-        next_state = torch.stack(next_state)
-        reward = torch.stack(reward)
-        done = torch.stack(done)
+        state = torch.stack(state).to(dtype, device)
+        action = torch.stack(action).to(dtype, device)
+        next_state = torch.stack(next_state).to(dtype, device)
+        reward = torch.stack(reward).to(dtype, device)
+        done = torch.stack(done).to(dtype, device)
 
         return state, action, next_state, reward, done

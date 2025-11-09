@@ -21,7 +21,7 @@ class State:
     p_rel : torch.Tensor
         Relative price deviations across time-constants, shape [M_p, N],
         p_rel[m, i] = (p[i] - s[m, i]) / s[m, i].
-    x : torch.Tensor
+    x_rel : torch.Tensor
         Value weights, shape [N+1]: [ cash_frac, (w * p) / V ].
     s_rel : Optional[torch.Tensor]
         EWMA volatility, shape [M_v, N], or None if disabled.
@@ -31,8 +31,8 @@ class State:
     time: torch.Tensor
     p_rel: torch.Tensor
     x_rel: torch.Tensor
-    s_rel: torch.Tensor = None
-    v_rel: torch.Tensor = None
+    s_rel: torch.Tensor
+    v_rel: torch.Tensor
 
     def to_tensor(self) -> torch.Tensor:
         """Concatenate into a 1-D tensor; matches env.state_size."""
@@ -43,7 +43,6 @@ class State:
             self.s_rel.flatten(),
             self.v_rel.flatten()
         ]
-        
         return torch.cat(parts)
 
 
@@ -62,22 +61,18 @@ class StateHistory:
     def get_p_rel(self) -> torch.Tensor:
         return torch.stack([s.p_rel for s in self.states])
 
-    def get_x(self) -> torch.Tensor:
-        return torch.stack([s.x for s in self.states])
+    def get_x_rel(self) -> torch.Tensor:
+        return torch.stack([s.x_rel for s in self.states])
 
-    def get_sigma(self) -> torch.Tensor:
-        sigmas = [s.s_rel for s in self.states if s.s_rel is not None]
-        return torch.stack(sigmas) if sigmas else torch.empty(0)
+    def get_s_rel(self) -> torch.Tensor:
+        return torch.stack([s.s_rel for s in self.states])
 
     def get_v_rel(self) -> torch.Tensor:
-        vols = [s.v_rel for s in self.states if s.v_rel is not None]
-        return torch.stack(vols) if vols else torch.empty(0)
+        return torch.stack([s.v_rel for s in self.states])
 
     def to_tensor(self) -> torch.Tensor:
         return torch.stack([s.to_tensor() for s in self.states])
 
-
-# ---------------------- environment ----------------------
 
 class MultiCurrencyEnv:
     r"""
@@ -122,19 +117,18 @@ class MultiCurrencyEnv:
         reward_mode: str = "log",
         roi_clip: tuple[float, float] = (-1.0, 1.0),
         use_dollar_volume: bool = True,
-        # numerics / device
-        device: Optional[torch.device] = None,
+        save_history: bool = False,
+        # numerics
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-12,
-        save_history: bool = False,
     ):
-        # --- shape checks
+        # shape checks
         assert isinstance(N, int) and N > 0
         assert tau_p.ndim == 1 and tau_p.numel() > 0
         assert reward_mode in ("diff", "log", "realized_roi")
 
+        # basic properties
         self.N = N
-        self.device = device or torch.device("cpu")
         self.dtype = dtype
         self.eps = float(eps)
 
@@ -146,13 +140,13 @@ class MultiCurrencyEnv:
         self.transaction_eps = float(transaction_eps)
 
         # fees (scalar → broadcast)
-        self.s_fee = self._as_fee_tensor(sell_fee)   # [N]
-        self.b_fee = self._as_fee_tensor(buy_fee)    # [N]
+        self.s_fee = self._as_fee_tensor(sell_fee) # [N]
+        self.b_fee = self._as_fee_tensor(buy_fee)  # [N]
 
         # τ-grids
-        self.tau_p = tau_p.to(self.device, self.dtype)
-        self.tau_s = tau_s.to(self.device, self.dtype)
-        self.tau_v = tau_v.to(self.device, self.dtype)
+        self.tau_p = tau_p.to(self.dtype)
+        self.tau_s = tau_s.to(self.dtype)
+        self.tau_v = tau_v.to(self.dtype)
 
         self.Mp = self.tau_p.numel()
         self.Ms = self.tau_s.numel()
@@ -174,9 +168,9 @@ class MultiCurrencyEnv:
             assert fee.numel() in (1, self.N)
             if fee.numel() == 1:
                 fee = fee.expand(self.N)
-            return fee.to(self.device, self.dtype).clamp(0.0, 1.0)
+            return fee.to(self.dtype).clamp(0.0, 1.0)
         else:
-            return torch.full((self.N,), float(fee), device=self.device, dtype=self.dtype).clamp(0.0, 1.0)
+            return torch.full((self.N,), float(fee), dtype=self.dtype).clamp(0.0, 1.0)
         
     def _compute_time_vector(self) -> torch.Tensor:
         """
@@ -201,7 +195,7 @@ class MultiCurrencyEnv:
         x = [C/V, (w*p)/V] ∈ R^{N+1}.
         """
         # get total portfolio value 
-        V = self.V.clamp(min=1e-12)
+        V = self.V.clamp(min=self.eps)
         
         # get cash fraction
         x_cash = (self.C / V)[None]
@@ -232,7 +226,6 @@ class MultiCurrencyEnv:
 
     @property
     def state_size(self) -> int:
-        # time (6) + p_rel (Mp*N) + x (N+1) + s_rel (Mv*N) + v_rel (Mu*N)
         return 6 + self.Mp * self.N + (self.N + 1) + self.Ms * self.N + self.Mv * self.N
 
     @property
@@ -260,22 +253,22 @@ class MultiCurrencyEnv:
         """
         if C0 is not None:
             self.C0 = float(C0)
-        self.C = torch.tensor(self.C0, dtype=self.dtype, device=self.device)
-        self.w = torch.zeros(self.N, dtype=self.dtype, device=self.device)
+        self.C = torch.tensor(self.C0, dtype=self.dtype)
+        self.w = torch.zeros(self.N, dtype=self.dtype)
 
         # ingest snapshot
         self.t = float(data["time"])
-        self.p = data["prices"].to(self.device, self.dtype)
+        self.p = data["prices"].to(self.dtype)
+        self.v = data["volume"].to(self.dtype)
         self.p_exec = self.p.clone() # first step executes at this price
-        self.v = data["volume"].to(self.device, self.dtype)
 
-        # price smoothers start at price → p_rel starts at 0
+        # price trackers
         self.p_smooth = self.p[None, :].repeat(self.Mp, 1).clone()
-        self.p_rel = torch.zeros((self.Mp, self.N), dtype=self.dtype, device=self.device)
+        self.p_rel = torch.zeros((self.Mp, self.N), dtype=self.dtype)
 
         # volatility trackers
-        self.q_var = torch.zeros((self.Ms, self.N), dtype=self.dtype, device=self.device)
-        self.s_rel = torch.sqrt(self.q_var + self.eps)   # ~0 initially
+        self.s_smooth = torch.zeros((self.Ms, self.N), dtype=self.dtype)
+        self.s_rel = torch.sqrt(self.s_smooth + self.eps)   # ~0 initially
 
         # volume trackers
         v0 = self.v * self.p if self.use_dollar_volume else self.v
@@ -286,7 +279,7 @@ class MultiCurrencyEnv:
         self.V_prev = self.V.detach().clone()
 
         # average-cost-basis bookkeeping for realized PnL
-        self.invested = torch.zeros(self.N, dtype=self.dtype, device=self.device)  # dollars spent incl. buy fees
+        self.invested = torch.zeros(self.N, dtype=self.dtype)  # dollars spent incl. buy fees
 
         state = self._get_state()
         if self.save_history:
@@ -306,37 +299,28 @@ class MultiCurrencyEnv:
             print("WARNING: dt < 0 - setting to zero!")
         self.dt = (t_new - self.t) * float(t_new > self.t)
         self.t = t_new
-        self.p = data["prices"].to(self.device, self.dtype)
-        self.v = data["volume"].to(self.device, self.dtype)
+        self.p[:] = data["prices"].to(self.dtype)
+        self.v[:] = data["volume"].to(self.dtype)
 
         # update price smoother
-        factor_p = (self.dt / self.tau_p)[:, None]
-        self.p_smooth = self.p_smooth + factor_p * (self.p[None, :] - self.p_smooth)
+        alpha_p = 1 - torch.exp(-self.dt / self.tau_p)[:, None]
+        self.p_smooth += alpha_p * (self.p[None, :] - self.p_smooth)
         self.p_rel = (self.p[None, :] - self.p_smooth) / self.p_smooth.clamp(min=self.eps)
 
         # update smooth volatility
-        r = (self.p.clamp(min=self.eps).log() - self.p_exec.clamp(min=self.eps).log())
-        r2 = r**2
-        factor_q = (self.dt / self.tau_s)[:, None]
-        if self.q_var is None:
-            self.q_var = r2[None, :].repeat(self.Ms, 1)
-        else:
-            self.q_var = self.q_var + factor_q * (r2[None, :] - self.q_var)
-        self.s_rel = torch.sqrt(self.q_var.clamp(min=0.0) + self.eps)
+        r = (self.p.clamp(min=self.eps).log() - self.p_exec.clamp(min=self.eps).log())**2
+        alpha_s = 1 - torch.exp(-self.dt / self.tau_s)[:, None]
+        self.s_smooth += alpha_s * (r[None, :] - self.s_smooth)
+        self.s_rel = torch.sqrt(self.s_smooth.clamp(min=0.0) + self.eps)
 
         # update smooth volume
         v = self.v * self.p if self.use_dollar_volume else self.v
-        factor_v = (self.dt / self.tau_v)[:, None]
-        if self.v_smooth is None:
-            self.v_smooth = v[None, :].repeat(self.Mv, 1)
-        else:
-            self.v_smooth = self.v_smooth + factor_v * (v[None, :] - self.v_smooth)
+        alpha_v = 1 - torch.exp(-self.dt / self.tau_v)[:, None]
+        self.v_smooth += alpha_v * (v[None, :] - self.v_smooth)
         self.v_rel = (v[None, :] - self.v_smooth) / self.v_smooth.clamp(min=self.eps)
 
     def _trade(self, a: torch.Tensor) -> None:
-        # --- 1) Trade at previous prices (self.p_exec)
         assert a.shape[-1] == self.N + 1, "Action must have N+1 outputs"
-        a = a.to(self.device, self.dtype)
 
         a0, a_cur = a[0], a[1:]
         self.p_exec = self.p.clone()
@@ -345,8 +329,8 @@ class MultiCurrencyEnv:
         sell_mask = a_cur < -self.transaction_eps
         f_sell = torch.zeros_like(a_cur)
         f_sell[sell_mask] = (-a_cur[sell_mask]).clamp(0.0, 1.0)
-        self.realized_pnl = torch.zeros(self.N, dtype=self.dtype, device=self.device)
-        self.realized_cost = torch.zeros(self.N, dtype=self.dtype, device=self.device)
+        self.realized_pnl = torch.zeros(self.N, dtype=self.dtype)
+        self.realized_cost = torch.zeros(self.N, dtype=self.dtype)
 
         if torch.any(sell_mask):
             units_sold = f_sell * self.w
@@ -399,12 +383,12 @@ class MultiCurrencyEnv:
         reward = None
 
         if self.reward_mode == "diff":
-            reward = float((self.V - self.V_prev).detach().cpu())
-            self.V_prev = self.V.detach().cpu()
+            reward = float((self.V - self.V_prev).detach())
+            self.V_prev = self.V.detach()
         
         elif self.reward_mode == "log":
-            V_prev = float(self.V_prev.detach().cpu())
-            V_now = float(self.V.detach().cpu())
+            V_prev = float(self.V_prev.detach())
+            V_now = float(self.V.detach())
             reward = float(torch.log(torch.tensor((V_now + self.eps) / (V_prev + self.eps))).item())
             self.V_prev = self.V.detach()
         
@@ -414,7 +398,7 @@ class MultiCurrencyEnv:
                 reward = 0.0
             else:
                 roi = (self.realized_pnl / (self.realized_cost + self.eps)).clamp(self.roi_clip[0], self.roi_clip[1])
-                reward = float(roi.sum().detach().cpu())  # sum over assets (simple, scale-free)
+                reward = float(roi.sum().detach())  # sum over assets (simple, scale-free)
         
         else:
             raise NotImplementedError(f"The reward mode {self.reward_mode} is not implemented.")
@@ -446,15 +430,15 @@ class MultiCurrencyEnv:
         reward = self._reward()
 
         # termination & bookkeeping
-        done = float(self.V.detach().cpu()) <= self.bankruptcy_threshold
+        done = float(self.V) <= self.bankruptcy_threshold
         info = {
             "t": self.t,
-            "a": a.detach().cpu().numpy(),
-            "p_exec": self.p_exec.detach().cpu().numpy(),
-            "p": self.p.detach().cpu().numpy(),
-            "w": self.w.detach().cpu().numpy(),
-            "C": float(self.C.detach().cpu()),
-            "V": float(self.V.detach().cpu()),
+            "a": a.clone(),
+            "C": float(self.C.clone()),
+            "V": float(self.V.clone()),
+            "w": self.w.clone(),
+            "p": self.p.clone(),
+            "p_exec": self.p_exec.clone(),
         }
 
         # fetch new state and store in hos
