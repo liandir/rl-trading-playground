@@ -21,7 +21,7 @@ class VanillaNetwork(torch.nn.Module):
         self.to(self.device)
 
     def forward(self, x):
-        z = x.view(-1, x.size(-1))
+        z = x.view(-1, self.n_in)
         for layer in self.layers:
             if z.size(-1) == layer.out_features:
                 z = z + layer(z)
@@ -30,7 +30,7 @@ class VanillaNetwork(torch.nn.Module):
         return self.out_act(self.out(z)).squeeze()
     
 
-class QNetwork(VanillaNetwork):
+class VanillaQNetwork(VanillaNetwork):
 
     def __init__(self, n_state, n_action, sizes=[], act=torch.tanh, out_act=lambda x: x, device="cpu"):
         super().__init__(n_state + n_action, 1, sizes, act, out_act, device)

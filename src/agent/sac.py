@@ -1,44 +1,6 @@
 import copy
 import torch
-
-
-class Buffer:
-
-    def __init__(self, memory_size, state_size, action_size):
-        self.memory_size = memory_size
-        self.full = 0
-        self.idx = 0
-
-        self.states = torch.zeros([memory_size, state_size])
-        self.actions = torch.zeros([memory_size, action_size])
-        self.next_states = torch.zeros([memory_size, state_size])
-        self.rewards = torch.zeros([memory_size])
-        self.dones = torch.zeros([memory_size])
-
-    def __len__(self):
-        return self.memory_size if self.full else self.idx
-
-    def store(self, state, action, next_state, reward, done):
-        self.states[self.idx] = state
-        self.actions[self.idx] = action
-        self.next_states[self.idx] = next_state
-        self.rewards[self.idx] = reward
-        self.dones[self.idx] = done
-        new_idx = (self.idx+1) % self.memory_size
-        if new_idx == 0:
-            self.full = 1
-        self.idx = new_idx
-
-    def sample(self, batch_size, device):
-        n_memories = len(self)
-        batch_idx = torch.randint(0, n_memories, size=[batch_size])
-        return (
-            self.states[batch_idx].to(device),
-            self.actions[batch_idx].to(device),
-            self.next_states[batch_idx].to(device),
-            self.rewards[batch_idx].to(device),
-            self.dones[batch_idx].to(device)
-        )
+from src.agent.buffer import Buffer
         
 
 class EntropyRegAgent:
@@ -80,18 +42,18 @@ class EntropyRegAgent:
         self.buffer = Buffer(buffer_size, self.state_size, self.action_size)
 
         # Learnable Entropy Coefficient
-        self.log_alpha = torch.tensor(torch.log(torch.tensor(max(alpha, 1e-6))), requires_grad=True, device=device)
+        self.log_alpha = torch.tensor(torch.log(torch.tensor(max(alpha, 1e-5))), requires_grad=True, device=device)
         self.alpha_optim = torch.optim.Adam([self.log_alpha], lr=1e-4)
 
         # Target entropy (if None, use default from SAC)
         self.target_entropy = target_entropy if target_entropy is not None else -self.action_size
 
-    def act(self, state, deterministic=True):
+    def act(self, state, explore=True):
         state = state.to(self.device)
-        if deterministic:
-            action = self.a.action(state)
-        else:
+        if explore:
             action, _ = self.a.sample(state)
+        else:
+            action = self.a.action(state)
 
         return action[0].cpu()
 
@@ -107,7 +69,7 @@ class EntropyRegAgent:
             for target_param, param in zip(self.q_t.parameters(), self.q.parameters()):
                 target_param.data.lerp_(param.data, 1 / self.tau)
 
-    def train_step(self, batch_size):
+    def update(self, batch_size):
         """Perform one SAC training step."""
         states, actions, next_states, rewards, dones = self.buffer.sample(batch_size, self.device)
 
@@ -212,3 +174,5 @@ class EntropyRegAgent:
                 torch.stack(total_loss_alpha),
                 torch.stack(total_reward),
             )
+        
+
