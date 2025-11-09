@@ -182,7 +182,7 @@ class MultiCurrencyEnv:
         """
         Map a Unix timestamp to cyclic clock coordinates for day/week/year.
         """
-        time = datetime.fromtimestamp(float(self.t))
+        time = datetime.fromtimestamp(self.t)
         dateiso = time.isocalendar()
 
         # ISO week count for the year (guard against edge cases)
@@ -450,8 +450,8 @@ class MultiCurrencyEnv:
         info = {
             "t": self.t,
             "a": a.detach().cpu().numpy(),
-            "prices_exec": self.p_exec.detach().cpu().numpy(),
-            "prices_now": self.p.detach().cpu().numpy(),
+            "p_exec": self.p_exec.detach().cpu().numpy(),
+            "p": self.p.detach().cpu().numpy(),
             "w": self.w.detach().cpu().numpy(),
             "C": float(self.C.detach().cpu()),
             "V": float(self.V.detach().cpu()),

@@ -20,8 +20,6 @@ class DDPGConfig:
     device: str = "cpu"
 
 
-# ----------------------- Vanilla DDPG Agent -----------------------
-
 class VanillaDDPG:
     """
     Vanilla Deep Deterministic Policy Gradient.
@@ -50,8 +48,6 @@ class VanillaDDPG:
         # Hard copy weights into targets
         self.hard_update(self.a_t, self.a)
         self.hard_update(self.q_t, self.q)
-
-    # --------------- Acting & Experience ---------------
 
     @torch.no_grad()
     def act(self, state: np.ndarray, explore: bool = False) -> np.ndarray:

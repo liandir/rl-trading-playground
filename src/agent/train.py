@@ -12,9 +12,11 @@ def train_on_historical(
         actor_lr=1e-4,
         critic_lr=1e-4,
         actor_m=0.0,
-        critic_m=0.0):
+        critic_m=0.0,
+        optim="AdamW"
+    ):
     """Train the agent in the given environment."""
-    agent.update_optimizers(actor_lr, critic_lr, optim="AdamW", a_m=actor_m, q_m=critic_m)
+    agent.update_optimizers(actor_lr, critic_lr, optim=optim, a_m=actor_m, q_m=critic_m)
 
     if store:
         total_reward = []
@@ -59,7 +61,7 @@ def train_on_historical(
                         episode_loss.append(_loss_dict)
                     
                     loss_dict = {
-                        key: sum([item[key] for item in loss_dicts])
+                        key: sum([item[key] for item in loss_dicts]) / len(loss_dicts)
                     for key in loss_dicts[0]}
 
                     msg = f"episode {episode} - reward: {sum(episode_reward):.5f}"
