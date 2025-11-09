@@ -448,6 +448,7 @@ class MultiCurrencyEnv:
         # termination & bookkeeping
         done = float(self.V.detach().cpu()) <= self.bankruptcy_threshold
         info = {
+            "t": self.t,
             "a": a.detach().cpu().numpy(),
             "prices_exec": self.p_exec.detach().cpu().numpy(),
             "prices_now": self.p.detach().cpu().numpy(),
