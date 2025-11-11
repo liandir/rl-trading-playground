@@ -37,15 +37,17 @@ class VanillaDDPG:
         critic: nn.Module,
         config: DDPGConfig = DDPGConfig(),
     ):
-        self.a = actor.to(dtype=config.dtype, device=config.device)
-        self.q = critic.to(dtype=config.dtype, device=config.device)
-        self.a_t = copy.deepcopy(self.a).to(dtype=config.dtype, device=config.device).eval()
-        self.q_t = copy.deepcopy(self.q).to(dtype=config.dtype, device=config.device).eval()
-
+        # config and replay buffer
         self.config = config
         self.dtype  = config.dtype
         self.device = torch.device(config.device)
         self.buffer = Buffer(config.buffer_size)
+
+        # networks
+        self.a = actor.to(dtype=config.dtype, device=config.device)
+        self.q = critic.to(dtype=config.dtype, device=config.device)
+        self.a_t = copy.deepcopy(self.a).to(dtype=config.dtype, device=config.device).eval()
+        self.q_t = copy.deepcopy(self.q).to(dtype=config.dtype, device=config.device).eval()
 
         # Hard copy weights into targets
         self.hard_update(self.a_t, self.a)
@@ -57,9 +59,8 @@ class VanillaDDPG:
         state: shape (state_dim,) or (1, state_dim)
         returns action in [action_low, action_high]
         """
-        self.a.eval()
-        a = self.a(state.to(dtype=self.dtype, device=self.device)).cpu()
-        self.a.train()
+        state = state.to(dtype=self.dtype, device=self.device)
+        a = self.a(state).cpu()
 
         if explore:
             noise = torch.randn_like(a) * self.config.noise_std

@@ -32,10 +32,10 @@ class Buffer:
         batch = random.sample(self.memory, batch_size)
         state, action, next_state, reward, done = zip(*batch)
 
-        state = torch.stack(state).to(dtype, device)
-        action = torch.stack(action).to(dtype, device)
-        next_state = torch.stack(next_state).to(dtype, device)
-        reward = torch.stack(reward).to(dtype, device)
-        done = torch.stack(done).to(dtype, device)
+        state = torch.stack(state).to(dtype=dtype, device=device)
+        action = torch.stack(action).to(dtype=dtype, device=device)
+        next_state = torch.stack(next_state).to(dtype=dtype, device=device)
+        reward = torch.stack(reward).to(dtype=dtype, device=device)
+        done = torch.stack(done).to(dtype=dtype, device=device)
 
         return state, action, next_state, reward, done
