@@ -253,9 +253,9 @@ Each step produces one scalar action per asset plus one global capital-allocatio
    \sum_i
    \operatorname{clip}
    \left(
-   \frac{\text{PnL}^{(\text{real})}*i}
-   {\text{Cost}^{(\text{real})}*i + \varepsilon},
-   \text{roi}*{\min}, \text{roi}*{\max}
+   \frac{\text{PnL}^{(\text{real})}_i}
+   {\text{Cost}^{(\text{real})}_i + \varepsilon},
+   \text{roi}_{\min}, \text{roi}_{\max}
    \right),
    $$
 
