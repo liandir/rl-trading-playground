@@ -87,10 +87,10 @@ Interpretation: current *exposure weights* (cash + asset value fractions).
 Let the **cost basis** (dollar amount committed) be $I_i(t)$, updated only on trades:
 
 $$
-I_i(t+!1) =
+I_i(t+1) =
 \begin{cases}
-I_i(t) + \text{buy_notional}_i, & \text{on buy},\\
-I_i(t) - \text{sold_cost}_i, & \text{on sell}.
+I_i(t) + \text{buy\_notional}_i, & \text{on buy},\\
+I_i(t) - \text{sold\_cost}_i, & \text{on sell.}
 \end{cases}
 $$
 
@@ -133,7 +133,7 @@ Given raw volume $v_i(t)$ (or dollar-volume $p_i v_i$),
 
 $$
 v_{\text{rel},i}(t)
-= \log!\left(\frac{v_i(t)}{v_i(t-\Delta t)+\varepsilon}\right),
+= \log\left(\frac{v_i(t)}{v_i(t-\Delta t)+\varepsilon}\right),
 $$
 
 which encodes multiplicative changes in market activity.
