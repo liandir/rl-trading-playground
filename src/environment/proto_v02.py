@@ -8,40 +8,23 @@ import torch
 
 PI = 3.141592653589793238462
 
-
 @dataclass
 class State:
-    """
-    Observation returned by the environment.
+    time: torch.Tensor            # [3,2] flattened or keep [3,2]
+    p_rel: torch.Tensor           # [M, N]
+    x_rel: torch.Tensor           # [N+1]  (exposure: cash + value weights)
+    c_rel: torch.Tensor           # [N]    (invested weights, stable)
+    rho:  torch.Tensor            # []     (overall commitment)
+    mny:  torch.Tensor            # [N]    (moneyness vs. entry)
+    v_rel: torch.Tensor           # [N] or [M_u,N] per your design
 
-    Attributes
-    ----------
-    time : torch.Tensor
-        Cyclic time features, shape [3,2].
-    p_rel : torch.Tensor
-        Relative price deviations across time-constants, shape [M_p, N],
-        p_rel[m, i] = (p[i] - s[m, i]) / s[m, i].
-    x_rel : torch.Tensor
-        Value weights, shape [N+1]: [ cash_frac, (w * p) / V ].
-    s_rel : Optional[torch.Tensor]
-        EWMA volatility, shape [M_v, N], or None if disabled.
-    v_rel : Optional[torch.Tensor]
-        Relative (dollar) v vs EWMA baseline, shape [M_u, N], or None.
-    """
-    time: torch.Tensor
-    p_rel: torch.Tensor
-    x_rel: torch.Tensor
-    v_rel: torch.Tensor
-
-    def to_tensor(self) -> torch.Tensor:
-        """Concatenate into a 1-D tensor; matches env.state_size."""
-        parts = [
-            self.time.flatten(),
-            self.p_rel.flatten(),
-            self.x_rel.flatten(),
+    def to_tensor(self):
+        return torch.cat([
+            self.time.flatten(), self.p_rel.flatten(),
+            self.x_rel.flatten(), self.c_rel.flatten(),
+            self.rho.view(1), self.mny.flatten(),
             self.v_rel.flatten()
-        ]
-        return torch.cat(parts)
+        ])
 
 
 class StateHistory:
@@ -147,7 +130,7 @@ class MultiCurrencyEnv:
         # initial capital (wallets start at zero)
         self.C0 = float(C0)
 
-        self.state_size = 7 + self.M * N + 2 * N
+        self.state_size = self.M*N + 4*N + 8
         self.action_size = N + 1
 
     def _as_fee_tensor(self, fee: float | torch.Tensor) -> torch.Tensor:
@@ -195,20 +178,37 @@ class MultiCurrencyEnv:
         x_assets = (self.w * self.p) / V
         
         return torch.cat([x_cash, x_assets])
+    
+    def _compute_cost_weights(self):
+        S = self.invested.sum()
+        c_rel = (self.invested / (S + self.eps)) if S > 0 else torch.zeros(self.N, dtype=self.dtype)
+        # rho = S / (self.C0 + self.eps)
+        rho = S / (S + self.C)
+        return c_rel, rho
+    
+    def _compute_moneyness(self):
+        has_pos = self.w > self.eps
+        avg_cost = torch.zeros_like(self.invested)
+        avg_cost[has_pos] = self.invested[has_pos] / self.w[has_pos]
+        m = torch.zeros(self.N, dtype=self.dtype)
+        m[has_pos] = (self.p[has_pos] - avg_cost[has_pos]) / (avg_cost[has_pos] + self.eps)
+        return m
 
     def _get_state(self) -> State:
-        """
-        Assemble current observation from internals.
-        """
         t_vec = self._compute_time_vector().to(self.dtype)
-        x_rel = self._compute_value_weights().to(self.dtype)
-        
+        x_rel = self._compute_value_weights().to(self.dtype)      # exposure
+        c_rel, rho = self._compute_cost_weights()                 # commitment (stable)
+        mny = self._compute_moneyness()                           # PnL vs entry
         return State(
-            time  = t_vec,              # time-vector
-            x_rel = x_rel,              # relative value of cash and assets
-            p_rel = self.p_rel.clone(), # relative price change
-            v_rel = self.v_rel.clone(), # log relative volume
+            time=t_vec,
+            p_rel=self.p_rel.clone(),
+            v_rel=self.v_rel.clone(),
+            x_rel=x_rel,
+            c_rel=c_rel,
+            rho=rho,
+            mny=mny,
         )
+
 
     @property
     def V(self) -> torch.Tensor:

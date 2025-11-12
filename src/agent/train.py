@@ -70,7 +70,6 @@ def train_on_historical(
                     print(msg, end="\r")
 
             if done or (i+1) > max_steps:
-                print(" --- ended episode --- ", end="\r")
                 break
 
             state = next_state
@@ -80,7 +79,7 @@ def train_on_historical(
             total_reward.append(episode_reward)
             total_info.append(episode_info)
 
-        print(f"episode {episode} - reward: {sum(episode_reward):.5f}" + " --- ended episode --- " if done else "")
+        print(f"episode {episode} - reward: {sum(episode_reward):.5f}")
     
     if store:
         return (
