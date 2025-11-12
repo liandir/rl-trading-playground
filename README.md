@@ -222,12 +222,12 @@ Each step produces one scalar action per asset plus one global capital-allocatio
 
 ### 3.3. Summary of Trading Logic
 
-| Symbol  | Range    | Meaning                                                  |     |   |
-| :------ | :------- | :------------------------------------------------------- | --- | - |
-| $a_0$   | $(-1,1)$ | maps to capital-allocation fraction $\bar a_0 \in [0,1)$ |     |   |
-| $a_i<0$ |          | sell fraction of units $                                 | a_i | $ |
-| $a_i>0$ |          | participate in buying budget proportionally to $a_i$     |     |   |
-| $N$     |          | number of tradable assets                                |     |   |
+| Symbol  | Range    | Meaning                                                  |
+| :------ | :------- | :------------------------------------------------------- |
+| $a_0$   | $(-1,1)$ | maps to capital-allocation fraction $\bar a_0 \in [0,1)$ |
+| $a_i<0$ |          | sell fraction of units                                   |
+| $a_i>0$ |          | participate in buying budget proportionally to $a_i$     |
+| $N$     |          | number of tradable assets                                |
 
 ---
 
@@ -242,7 +242,7 @@ Each step produces one scalar action per asset plus one global capital-allocatio
 2. **Log Return**
 
    $$
-   r_t = \log!\frac{V_{t+1}+\varepsilon}{V_t+\varepsilon}.
+   r_t = \log\left(\frac{V_{t+1}+\varepsilon}{V_t+\varepsilon}\right).
    $$
 
 3. **Realized ROI** (default for stable training)
@@ -252,7 +252,7 @@ Each step produces one scalar action per asset plus one global capital-allocatio
    r_t =
    \sum_i
    \operatorname{clip}
-   !\left(
+   \left(
    \frac{\text{PnL}^{(\text{real})}*i}
    {\text{Cost}^{(\text{real})}*i + \varepsilon},
    \text{roi}*{\min}, \text{roi}*{\max}
