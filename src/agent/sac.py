@@ -51,8 +51,8 @@ class SACAgent:
         self.q_t = copy.deepcopy(self.q).to(dtype=config.dtype, device=config.device).eval()
 
         # entropy regularization
-        log_alpha = torch.log(torch.tensor(config.alpha, dtype=self.dtype))
-        self.log_alpha = torch.nn.Parameter(log_alpha, requires_grad=True).to(self.device)
+        log_alpha = torch.log(torch.tensor(config.alpha, dtype=self.dtype, device=self.device))
+        self.log_alpha = torch.nn.Parameter(log_alpha, requires_grad=True)
         self.alpha_optim = torch.optim.Adam([self.log_alpha], lr=1e-4)
         self.target_entropy = config.target_entropy if config.target_entropy is not None else -self.q.action_size
 
