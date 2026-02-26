@@ -88,10 +88,10 @@ class MultiCurrencyEnv:
         tau_p: torch.Tensor,
         *,
         # optional
+        temp: float = 1.0,
         bankruptcy_threshold: float = 0.0,
         transaction_eps: float = 0.0,
         reward_mode: str = "log",
-        roi_clip: tuple[float, float] = (-1.0, 1.0),
         use_dollar_volume: bool = True,
         save_history: bool = False,
         # numerics
@@ -101,7 +101,7 @@ class MultiCurrencyEnv:
         # shape checks
         assert isinstance(N, int) and N > 0
         assert tau_p.ndim == 1 and tau_p.numel() > 0
-        assert reward_mode in ("diff", "log", "realized_roi", "smooth_roi")
+        assert reward_mode in ("diff", "return", "log", "realized_roi", "smooth_return")
 
         # basic properties
         self.N = N
@@ -109,9 +109,9 @@ class MultiCurrencyEnv:
         self.eps = float(eps)
 
         # controls
+        self.temp = float(temp)
         self.bankruptcy_threshold = float(bankruptcy_threshold)
         self.reward_mode = reward_mode
-        self.roi_clip = tuple(roi_clip)
         self.use_dollar_volume = bool(use_dollar_volume)
         self.transaction_eps = float(transaction_eps)
 
@@ -210,7 +210,7 @@ class MultiCurrencyEnv:
         )
 
     @property
-    def V(self) -> torch.Tensor:
+    def V(self) -> float:
         return self.C + torch.sum(self.w * self.p)
 
     def reset(self, data: dict, C0: Optional[float] = None) -> State:
@@ -263,7 +263,115 @@ class MultiCurrencyEnv:
             self.history.append(state)
         
         return state
-    
+
+    def _trade(self, a: torch.Tensor | None) -> None:
+        """
+        Rebalance the portfolio toward target value weights.
+
+        Parameters
+        ----------
+        a : torch.Tensor
+            Either:
+              - target weights x_star ∈ Δ^{N+1} (cash + N assets), or
+              - raw scores/logits which will be softmaxed here (see comment below).
+        """
+        # 1) current and target weights
+        x_curr = self._compute_value_weights()  # [N+1], sums ~ 1
+        x_star = torch.softmax(a.to(self.dtype) / self.temp, dim=-1) if a is not None else x_curr
+
+        # 2) turnover for full move x_curr -> x_star
+        to_full = 0.5 * (x_star - x_curr).abs().sum() # scalar
+
+        # dead-zone: if turnover is tiny, skip trading altogether
+        if to_full.item() < self.transaction_eps:
+            # no trades, realized PnL/cost for this step = 0
+            self.realized_pnl = torch.zeros(self.N, dtype=self.dtype)
+            self.realized_cost = torch.zeros(self.N, dtype=self.dtype)
+            return x_star - x_curr
+
+        # 3) turnover cap: at most kappa fraction of portfolio value trades
+        # kappa = 0.5 # e.g. 10% of portfolio per step
+        # lam = min(1.0, float(kappa / (to_full.item() + self.eps)))
+
+        # x_exec = (1.0 - lam) * x_curr + lam * x_star  # [N+1]
+        x_exec = x_star
+
+        # 4) translate executed weights into dollar deltas
+        V = float(self.V)
+        dollar_curr_assets = self.w * self.p  # [N]
+        dollar_targ_assets = x_exec[1:] * V
+        delta = dollar_targ_assets - dollar_curr_assets  # + buy, - sell
+
+        # reset realized PnL/cost for this step
+        self.realized_pnl  = torch.zeros(self.N, dtype=self.dtype)
+        self.realized_cost = torch.zeros(self.N, dtype=self.dtype)
+
+        # ===== Sells first (delta < 0) =====
+        sell_idx = delta < 0
+        if sell_idx.any():
+            sell_notional = (-delta[sell_idx]).clamp(min=0.0)  # dollars to free by selling
+
+            # pre-trade snapshots for average-cost basis
+            w_before        = self.w.clone()
+            invested_before = self.invested.clone()
+
+            p_sel      = self.p[sell_idx]
+            w_sel      = w_before[sell_idx]
+            inv_sel    = invested_before[sell_idx]
+
+            # units to sell, limited by position size
+            units_sold = (sell_notional / p_sel).clamp(max=w_sel)
+            notional   = units_sold * p_sel
+            fees_s     = self.s_fee[sell_idx] * notional
+            proceeds   = notional - fees_s  # net cash inflow
+
+            # average cost per unit BEFORE trade
+            avg_cost_sel = torch.zeros_like(inv_sel)
+            has_pos_sel = w_sel > self.eps
+            avg_cost_sel[has_pos_sel] = inv_sel[has_pos_sel] / w_sel[has_pos_sel]
+
+            base_sel = units_sold * avg_cost_sel  # cost basis of sold units
+
+            # update state: cash, positions, invested
+            self.C = self.C + proceeds.sum()
+
+            self.w[sell_idx] = w_sel - units_sold
+            self.invested[sell_idx] = (inv_sel - base_sel).clamp(min=0.0)
+
+            # zero out dust positions
+            dust_mask = self.w <= self.eps
+            if torch.any(dust_mask):
+                self.w[dust_mask] = 0.0
+                self.invested[dust_mask] = 0.0
+
+            # realized PnL/cost on sold legs
+            self.realized_pnl[sell_idx]  = (proceeds - base_sel)
+            self.realized_cost[sell_idx] = base_sel + fees_s
+
+        # ===== Then buys (delta > 0) =====
+        buy_idx = delta > 0
+        if buy_idx.any():
+            buy_notional = delta[buy_idx]
+            p_buy        = self.p[buy_idx]
+
+            # cap total buy by available cash
+            total_desired = buy_notional.sum()
+            cash = self.C
+            scale = min(1.0, float(cash / (total_desired + 1e-12)))
+            buy_notional = buy_notional * scale
+
+            fee_b = self.b_fee[buy_idx] * buy_notional
+            effective = buy_notional - fee_b
+            units_bought = effective / p_buy.clamp(min=1e-12)
+
+            self.w[buy_idx] += units_bought
+            self.C          -= buy_notional.sum()
+
+            # dollars invested include buy fees (you pay them)
+            self.invested[buy_idx] += buy_notional
+
+        return x_star - x_curr # for debugging / analysis
+        
     def _update(self, data: dict) -> None:
         """
         Update smoothers/features from *current* self.p and self.v.
@@ -293,67 +401,6 @@ class MultiCurrencyEnv:
         alpha_V = 1 - torch.exp(-self.dt / self.tau_p)
         self.V_smooth += alpha_V * (self.V - self.V_smooth)
 
-    def _trade(self, a: torch.Tensor | None) -> None:
-        # unpack trade fractions
-        a_ = torch.tanh(a) if a is not None else torch.zeros(self.N + 1, dtype=self.dtype)
-        a0, a_cur = a_[0], a_[1:]
-
-        # selling
-        sell_mask = a_cur < -self.transaction_eps
-        f_sell = torch.zeros_like(a_cur)
-        f_sell[sell_mask] = (-a_cur[sell_mask]).clamp(0.0, 1.0)
-
-        self.realized_pnl = torch.zeros(self.N, dtype=self.dtype)
-        self.realized_cost = torch.zeros(self.N, dtype=self.dtype)
-
-        if torch.any(sell_mask):
-            units_sold = f_sell * self.w
-            notional = units_sold * self.p
-            fees_s = self.s_fee * notional
-            proceeds = notional - fees_s
-
-            # realized PnL via average-cost basis
-            has_position = self.w > self.eps
-            avg_cost = torch.zeros_like(self.invested)
-            avg_cost[has_position] = self.invested[has_position] / self.w[has_position]
-            base = units_sold * avg_cost  # dollars of cost closed
-            pnl = proceeds - base
-
-            # update books
-            self.C = self.C + proceeds.sum()
-            self.w = self.w - units_sold
-            self.invested = (self.invested - base).clamp(min=0.0)
-            dust_mask = self.w <= self.eps
-            if torch.any(dust_mask):
-                self.w[dust_mask] = 0.0
-                self.invested[dust_mask] = 0.0
-
-            self.realized_pnl[sell_mask] = pnl[sell_mask]
-            self.realized_cost[sell_mask] = base[sell_mask]
-
-        # buying
-        buy_mask = a_cur > self.transaction_eps
-        if torch.any(buy_mask):
-            positives = a_cur[buy_mask]
-            denom = positives.sum()
-            if denom.item() > 1e-12:
-                weights = torch.zeros_like(a_cur)
-                weights[buy_mask] = positives / denom
-                a0_bar = 0.5 * (a0 + 1.0)
-                a0_bar = a0_bar.clamp(0.0, 1.0)
-                I = a0_bar * self.C
-                if I.item() > 0.0:
-                    A = weights * I
-                    fee_b = self.b_fee * A
-                    # effective units bought at execution price
-                    units_bought = (A - fee_b) / self.p.clamp(min=1e-12)
-                    self.w = self.w + units_bought
-                    self.C = self.C - I
-                    # average-cost basis (invested dollars include buy fees)
-                    self.invested = self.invested + A
-
-        return a_.tolist()
-
     def _reward(self):
         r'''Calculate the reward signal.'''
         reward = None
@@ -361,22 +408,28 @@ class MultiCurrencyEnv:
         if self.reward_mode == "diff":
             reward = float((self.V - self.V_prev).detach())
             self.V_prev = self.V.detach()
+
+        elif self.reward_mode == "return":
+            V_prev = float(self.V_prev.detach())
+            V_now = float(self.V.detach())
+            reward = (V_now - V_prev) / V_prev
+            self.V_prev = self.V.detach().clone()
         
         elif self.reward_mode == "log":
             V_prev = float(self.V_prev.detach())
             V_now = float(self.V.detach())
-            reward = float(torch.log(torch.tensor((V_now + self.eps) / (V_prev + self.eps))).item())
-            self.V_prev = self.V.detach()
+            reward = float(torch.log(torch.tensor(V_now / V_prev)).item())
+            self.V_prev = self.V.detach().clone()
         
         elif self.reward_mode == "realized_roi":
             B = self.realized_cost.sum().item()
             if B <= 0.0:
                 reward = 0.0
             else:
-                roi = (self.realized_pnl / (self.realized_cost + self.eps)).clamp(self.roi_clip[0], self.roi_clip[1])
+                roi = (self.realized_pnl / (self.realized_cost + self.eps))
                 reward = float(roi.sum().detach()) # sum over assets (simple, scale-free)
 
-        elif self.reward_mode == "smooth_roi":
+        elif self.reward_mode == "smooth_return":
             smooth_roi = (self.V - self.V_smooth) / (self.V_smooth)
             reward = smooth_roi.mean().item() # average over τ-grid
         
@@ -411,14 +464,16 @@ class MultiCurrencyEnv:
 
         # termination & bookkeeping
         done = float(self.V) <= self.bankruptcy_threshold
-        if done: reward = -100
+        if done:
+            reward = -1.0
+        
         info = {
             "t": self.t,
-            "a": action,
+            "a": action.tolist(),
             "C": float(self.C),
             "V": float(self.V),
             "w": self.w.tolist(),
-            "p": self.p.tolist()
+            "p": self.p.tolist(),
         }
 
         # fetch new state and store in hos

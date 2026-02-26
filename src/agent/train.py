@@ -1,5 +1,6 @@
 import torch
 
+
 def train_on_historical(
         agent, env, data,
         n_episodes,
@@ -33,11 +34,8 @@ def train_on_historical(
             episode_loss = []
 
         for i in range(max_steps):
-            if i < warm_up:
-                action = torch.zeros(env.action_size)
-            else:
-                action = agent.act(state, explore=True)
-
+            action = agent.act(state, explore=True) if i > warm_up else None
+            
             next_state, reward, done, info = env.step(action, data[start+i])
             next_state = next_state.to_tensor()
 
@@ -53,23 +51,23 @@ def train_on_historical(
                     torch.tensor(done).to(env.dtype)
                 )
         
-                if (i+1) % update_interval == 0:
+                if (i+1) % update_interval == 0 and len(agent.buffer) >= batch_size:
                     loss_dicts = []
                     for _ in range(n_updates):
-                        _loss_dict = agent.update(batch_size)
-                        loss_dicts.append(_loss_dict)
-                        episode_loss.append(_loss_dict)
+                        loss_dicts.append(agent.update(batch_size))
                     
                     loss_dict = {
                         key: sum([item[key] for item in loss_dicts]) / len(loss_dicts)
                     for key in loss_dicts[0]}
 
-                    msg = f"episode {episode} - reward: {sum(episode_reward):.5f}"
+                    episode_loss.append(loss_dict)
+
+                    msg = f"episode {episode} [{100*i/max_steps:.1f}%] - reward: {reward:.5f} - portfolio: {info['V']:.2f}€"
                     for key, val in loss_dict.items():
                         msg += f" - {key}: {val:.5f}"
                     print(msg, end="\r")
 
-            if done or (i+1) > max_steps:
+            if done or (i+1) >= max_steps:
                 break
 
             state = next_state
@@ -79,7 +77,11 @@ def train_on_historical(
             total_reward.append(episode_reward)
             total_info.append(episode_info)
 
-        print(f"episode {episode} - reward: {sum(episode_reward):.5f}")
+        msg = f"episode {episode} [{100*i/max_steps:.1f}%] - total reward: {sum(episode_reward):.5f} - portfolio: {info['V']:.2f}€"
+        if len(episode_loss) > 0:
+            for key in episode_loss[0].keys():
+                msg += f" - {key}: {sum([loss_dict[key] for loss_dict in episode_loss]) / len(episode_loss):.5f}"
+        print(msg)
     
     if store:
         return (

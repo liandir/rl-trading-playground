@@ -13,11 +13,9 @@ from src.agent.utils import get_optimizer
 class SACConfig:
     gamma: float = 0.99
     tau: float = 100.0
-    alpha: float = 0.1
+    initial_alpha: float = 0.1
     target_entropy: float | None = None
     buffer_size: int = 10000
-    action_low: float = -1.0
-    action_high: float = 1.0
     dtype: torch.dtype = torch.float32
     device: str = "cpu"
 
@@ -51,9 +49,9 @@ class SACAgent:
         self.q_t = copy.deepcopy(self.q).to(dtype=config.dtype, device=config.device).eval()
 
         # entropy regularization
-        log_alpha = torch.log(torch.tensor(config.alpha, dtype=self.dtype, device=self.device))
+        log_alpha = torch.log(torch.tensor(config.initial_alpha, dtype=self.dtype, device=self.device))
         self.log_alpha = torch.nn.Parameter(log_alpha, requires_grad=True)
-        self.alpha_optim = torch.optim.Adam([self.log_alpha], lr=1e-4)
+        self.alpha_optim = torch.optim.Adam([self.log_alpha], lr=1e-5)
         self.target_entropy = config.target_entropy if config.target_entropy is not None else -self.q.action_size
 
         # Hard copy weights into targets
@@ -64,16 +62,11 @@ class SACAgent:
     def act(self, state: torch.Tensor, explore: bool = False) -> torch.Tensor:
         """
         state: shape (state_dim,) or (1, state_dim)
-        returns action in [action_low, action_high]
+        returns action: shape (action_dim,)
         """
         state = state.to(dtype=self.dtype, device=self.device)
-        
-        if explore:
-            action, _ = self.a.sample(state)
-        else:
-            action = self.a.action(state)
-
-        return action[0].cpu().clamp(self.config.action_low, self.config.action_high)
+        action, _ = self.a.sample(state, explore)
+        return action[0].cpu()
 
     def store(self, state, action, next_state, reward, done):
         self.buffer.store(state, action, next_state, reward, done)
@@ -101,25 +94,24 @@ class SACAgent:
             next_q_values = self.q_t(next_states, next_actions) - self.log_alpha.exp() * next_log_probs
             q_targets = rewards + self.config.gamma * (1 - dones) * next_q_values
 
-        # Critic Loss (Q-function)
+        # critic loss (q-function)
         self.q_optim.zero_grad()
         q_values = self.q(states, actions)
         q_loss = torch.square(q_targets - q_values).mean()
         q_loss.backward()
         self.q_optim.step()
 
-        # Actor Loss (Policy Update)
+        # actor loss (policy update)
         self.a_optim.zero_grad()
         actions_, log_probs_ = self.a.sample(states)
-        # log_probs_ = torch.nan_to_num(log_probs_, nan=0.0, neginf=-20.0, posinf=0.0)
         q_values_ = self.q(states, actions_)
         a_loss = (self.log_alpha.exp() * log_probs_ - q_values_).mean()
         a_loss.backward()
         self.a_optim.step()
 
-        # Entropy Coefficient (Alpha) Update
+        # entropy coefficient (alpha) update
         self.alpha_optim.zero_grad()
-        alpha_loss = (-self.log_alpha.exp() * (log_probs_ + self.target_entropy).detach()).mean()
+        alpha_loss = (-self.log_alpha * (log_probs_ + self.target_entropy).detach()).mean()
         alpha_loss.backward()
         self.alpha_optim.step()
 
@@ -144,16 +136,13 @@ class SACAgent:
         target.load_state_dict(source.state_dict())
 
     def save(self, path: str):
-        torch.save(
-            {
-                "actor": self.a.state_dict(),
-                "critic": self.q.state_dict(),
-                "actor_target": self.a_t.state_dict(),
-                "critic_target": self.q_t.state_dict(),
-                "config": self.config.__dict__
-            },
-            path,
-        )
+        torch.save({
+            "actor": self.a.state_dict(),
+            "critic": self.q.state_dict(),
+            "actor_target": self.a_t.state_dict(),
+            "critic_target": self.q_t.state_dict(),
+            "config": self.config.__dict__
+        }, path)
 
     def load(self, path: str, strict: bool = True):
         ckpt = torch.load(path, map_location=self.device)
@@ -161,3 +150,95 @@ class SACAgent:
         self.q.load_state_dict(ckpt["critic"], strict=strict)
         self.a_t.load_state_dict(ckpt["actor_target"], strict=strict)
         self.q_t.load_state_dict(ckpt["critic_target"], strict=strict)
+
+
+def train_on_historical(
+        agent, env, data,
+        n_episodes,
+        batch_size=32,
+        update_interval=100,
+        n_updates=8,
+        max_steps=2000,
+        warm_up=500,
+        store=1,
+        actor_lr=1e-4,
+        critic_lr=1e-4,
+        actor_m=0.0,
+        critic_m=0.0,
+        optim="AdamW"
+    ):
+    """Train the agent in the given environment."""
+    agent.update_optimizers(actor_lr, critic_lr, optim=optim, a_m=actor_m, q_m=critic_m)
+
+    if store:
+        total_reward = []
+        total_info = []
+        total_loss = []
+
+    for episode in range(1, n_episodes+1):
+        start = torch.randint(len(data)-max_steps, size=[1]).item()
+        state = env.reset(data[start]).to_tensor()
+
+        if store:
+            episode_reward = []
+            episode_info = []
+            episode_loss = []
+
+        for i in range(max_steps):
+            action = agent.act(state, explore=True) if i > warm_up else None
+            
+            next_state, reward, done, info = env.step(action, data[start+i])
+            next_state = next_state.to_tensor()
+
+            episode_reward.append(reward)
+            episode_info.append(info)
+
+            if i > warm_up:
+                agent.buffer.store(
+                    state.detach(),
+                    action.detach(),
+                    next_state.detach(),
+                    torch.tensor(reward).to(env.dtype),
+                    torch.tensor(done).to(env.dtype)
+                )
+        
+                if (i+1) % update_interval == 0 and len(agent.buffer) >= batch_size:
+                    loss_dicts = []
+                    for _ in range(n_updates):
+                        loss_dicts.append(agent.update(batch_size))
+                    
+                    loss_dict = {
+                        key: sum([item[key] for item in loss_dicts]) / len(loss_dicts)
+                    for key in loss_dicts[0]}
+
+                    episode_loss.append(loss_dict)
+
+                    msg = f"episode {episode} [{100*i/max_steps:.1f}%] - reward: {reward:.5f} - portfolio: {info['V']:.2f}€"
+                    for key, val in loss_dict.items():
+                        msg += f" - {key}: {val:.5f}"
+                    print(msg, end="\r")
+
+            if done or (i+1) >= max_steps:
+                break
+
+            state = next_state
+
+        if store:
+            total_loss.append(episode_loss)
+            total_reward.append(episode_reward)
+            total_info.append(episode_info)
+
+        msg = f"episode {episode} [{100*i/max_steps:.1f}%] - total reward: {sum(episode_reward):.5f} - portfolio: {info['V']:.2f}€"
+        if len(episode_loss) > 0:
+            for key in episode_loss[0].keys():
+                msg += f" - {key}: {sum([loss_dict[key] for loss_dict in episode_loss]) / len(episode_loss):.5f}"
+        print(msg)
+    
+    if store:
+        return (
+            total_loss,
+            total_reward,
+            total_info,
+        )
+    
+    return [], [], [], {}

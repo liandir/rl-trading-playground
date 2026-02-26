@@ -110,4 +110,4 @@ def main(pair_like: str = "BTC/USD", depth: int = 5, interval_sec: float = 1.0):
 
 if __name__ == "__main__":
     # Try other pairs too: "ETH/EUR", "SOL/USD", "USDT/USD"
-    main("BTC/USD", depth=5, interval_sec=1.0)
+    main("BTC/EUR", depth=5, interval_sec=1.0)

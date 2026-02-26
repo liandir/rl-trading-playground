@@ -1,5 +1,5 @@
 import random
-import torch
+import torch    
 
 
 class Buffer:
@@ -23,7 +23,6 @@ class Buffer:
                 self.full = True
                 self.idx = 0
         else:
-            # Overwrite oldest
             self.memory[self.idx] = transition
             self.idx = (self.idx + 1) % self.memory_size
 
