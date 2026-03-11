@@ -1,5 +1,5 @@
 import random
-import torch    
+import torch
 
 
 class Buffer:
@@ -38,3 +38,34 @@ class Buffer:
         done = torch.stack(done).to(dtype=dtype, device=device)
 
         return state, action, next_state, reward, done
+
+
+class RolloutBuffer:
+
+    def __init__(self):
+        self.clear()
+
+    def clear(self):
+        self.states = []
+        self.actions = []
+        self.log_probs = []
+        self.rewards = []
+        self.dones = []
+
+    def store(self, state, action, log_prob, reward, done):
+        self.states.append(state)
+        self.actions.append(action)
+        self.log_probs.append(log_prob)
+        self.rewards.append(reward)
+        self.dones.append(done)
+
+    def __len__(self):
+        return len(self.states)
+
+    def to_tensors(self, device, dtype):
+        states     = torch.stack(self.states).to(device=device, dtype=dtype)
+        actions    = torch.stack(self.actions).to(device=device, dtype=dtype)
+        log_probs  = torch.stack(self.log_probs).to(device=device, dtype=dtype)
+        rewards    = torch.stack(self.rewards).to(device=device, dtype=dtype)
+        dones      = torch.stack(self.dones).to(device=device, dtype=dtype)
+        return states, actions, log_probs, rewards, dones

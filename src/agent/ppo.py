@@ -3,37 +3,7 @@ from torch import distributions
 
 from src.network.vanilla import ActionValueNetwork
 from src.network.recurrent import RecurrentActionValueNetwork
-
-
-class RolloutBuffer:
-
-    def __init__(self):
-        self.clear()
-
-    def clear(self):
-        self.states = []
-        self.actions = []
-        self.log_probs = []
-        self.rewards = []
-        self.dones = []
-
-    def store(self, state, action, log_prob, reward, done):
-        self.states.append(state)
-        self.actions.append(action)
-        self.log_probs.append(log_prob)
-        self.rewards.append(reward)
-        self.dones.append(done)
-
-    def __len__(self):
-        return len(self.states)
-
-    def to_tensors(self, device, dtype):
-        states     = torch.stack(self.states).to(device=device, dtype=dtype)
-        actions    = torch.stack(self.actions).to(device=device, dtype=dtype)
-        log_probs  = torch.stack(self.log_probs).to(device=device, dtype=dtype)
-        rewards    = torch.stack(self.rewards).to(device=device, dtype=dtype)
-        dones      = torch.stack(self.dones).to(device=device, dtype=dtype)
-        return states, actions, log_probs, rewards, dones
+from .buffer import RolloutBuffer
 
 
 class PPOAgent:
@@ -673,7 +643,7 @@ class RecurrentPPOAgent:
                 total_reward.append(episode_reward)
                 total_info.append(episode_info)
 
-            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - total reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}€"
+            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - avg. reward: {sum(episode_reward) / len(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}€"
             if store_results and len(episode_loss) > 0:
                 keys = episode_loss[0].keys()
                 for key in keys:
