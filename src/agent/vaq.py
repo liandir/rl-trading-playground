@@ -1,12 +1,261 @@
 import torch
 from torch import distributions
 
-from src.network.vanilla import ActionValueNetwork
-from src.network.recurrent import RecurrentActionValueNetwork
+from src.network.vanilla import VanillaNetwork
+from src.network.recurrent import RecurrentNetwork, _build_recurrent_cell
+
+
+def _expected_q(logits: torch.Tensor, q_values: torch.Tensor) -> torch.Tensor:
+    probs = torch.softmax(logits, dim=-1)
+    return (probs * q_values).sum(dim=-1)
+
+
+def _selected_q(q_values: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+    actions_long = actions.long()
+    return q_values.gather(-1, actions_long.unsqueeze(-1)).squeeze(-1)
+
+
+UPDATE_METRIC_NAMES = (
+    "policy_objective",
+    "critic_loss",
+    "entropy",
+    "total_loss",
+    "td_error_mean",
+    "td_error_abs_mean",
+    "td_error_std",
+    "q_taken_mean",
+    "target_mean",
+    "v_pi_mean",
+    "q_max_mean",
+    "q_std_mean",
+    "chosen_action_prob_mean",
+    "policy_confidence_mean",
+    "explained_variance",
+    "adv_abs_mean",
+    "adv_pos_frac",
+)
+
+
+def _empty_update_metrics() -> dict[str, list[float]]:
+    return {name: [0.0] for name in UPDATE_METRIC_NAMES}
+
+
+def _init_update_metrics() -> dict[str, list[float]]:
+    return {name: [] for name in UPDATE_METRIC_NAMES}
+
+
+def _explained_variance(targets: torch.Tensor, residuals: torch.Tensor) -> torch.Tensor:
+    target_var = targets.var(unbiased=False)
+    if float(target_var.detach().cpu().item()) <= 1e-12:
+        return torch.zeros((), device=targets.device, dtype=targets.dtype)
+    return 1.0 - residuals.var(unbiased=False) / (target_var + 1e-12)
+
+
+def _append_update_metrics(
+    metric_store: dict[str, list[float]],
+    *,
+    logits: torch.Tensor,
+    log_probs: torch.Tensor,
+    q_values_pred: torch.Tensor,
+    q_taken_pred: torch.Tensor,
+    targets: torch.Tensor,
+    raw_advantages: torch.Tensor,
+    policy_objective: torch.Tensor,
+    critic_loss: torch.Tensor,
+    entropy: torch.Tensor,
+    loss: torch.Tensor,
+):
+    probs = torch.softmax(logits.detach(), dim=-1)
+    q_values_detached = q_values_pred.detach()
+    q_taken_detached = q_taken_pred.detach()
+    targets_detached = targets.detach()
+    raw_advantages_detached = raw_advantages.detach()
+
+    v_pi_pred = (probs * q_values_detached).sum(dim=-1)
+    q_max_pred = q_values_detached.max(dim=-1).values
+    q_std_pred = q_values_detached.std(dim=-1, unbiased=False)
+    td = targets_detached - q_taken_detached
+
+    metrics = {
+        "policy_objective": policy_objective.detach(),
+        "critic_loss": critic_loss.detach(),
+        "entropy": entropy.detach(),
+        "total_loss": loss.detach(),
+        "td_error_mean": td.mean(),
+        "td_error_abs_mean": td.abs().mean(),
+        "td_error_std": td.std(unbiased=False),
+        "q_taken_mean": q_taken_detached.mean(),
+        "target_mean": targets_detached.mean(),
+        "v_pi_mean": v_pi_pred.mean(),
+        "q_max_mean": q_max_pred.mean(),
+        "q_std_mean": q_std_pred.mean(),
+        "chosen_action_prob_mean": log_probs.detach().exp().mean(),
+        "policy_confidence_mean": probs.max(dim=-1).values.mean(),
+        "explained_variance": _explained_variance(targets_detached, td),
+        "adv_abs_mean": raw_advantages_detached.abs().mean(),
+        "adv_pos_frac": (raw_advantages_detached > 0).to(dtype=targets_detached.dtype).mean(),
+    }
+    for name, value in metrics.items():
+        metric_store[name].append(float(value.cpu().item()))
+
+
+class ActionQNetwork(torch.nn.Module):
+    def __init__(
+        self,
+        state_dim,
+        action_dim,
+        hidden_dims=[],
+        hidden_dims_actor=[],
+        hidden_dims_q=[],
+        activation=torch.relu,
+    ):
+        super().__init__()
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.activation = activation
+
+        self.layers = torch.nn.ModuleList()
+        prev = state_dim
+        for h in hidden_dims:
+            self.layers.append(torch.nn.Linear(prev, h))
+            prev = h
+
+        self.actor = VanillaNetwork(
+            prev,
+            action_dim,
+            hidden_dims=hidden_dims_actor,
+            activation=activation,
+        )
+
+        self.q_head = VanillaNetwork(
+            prev,
+            action_dim,
+            hidden_dims=hidden_dims_q,
+            activation=activation,
+        )
+
+    def forward(self, x):
+        z = x.view(-1, self.state_dim)
+        for layer in self.layers:
+            z = self.activation(layer(z))
+        return z
+
+    def a(self, x):
+        return self.actor(self.forward(x))
+
+    def q(self, x):
+        return self.q_head(self.forward(x))
+
+    def v(self, x):
+        logits, q_values = self.aq(x)
+        return _expected_q(logits, q_values).unsqueeze(-1)
+
+    def aq(self, x):
+        z = self.forward(x)
+        return self.actor(z), self.q_head(z)
+
+
+class RecurrentActionQNetwork(torch.nn.Module):
+    def __init__(
+        self,
+        state_dim,
+        action_dim,
+        hidden_dims=None,
+        hidden_dims_actor=None,
+        hidden_dims_q=None,
+        activation=torch.tanh,
+        recurrent_type: str = "simple",
+        recurrent_kwargs: dict | None = None,
+    ):
+        super().__init__()
+        hidden_dims = hidden_dims or []
+        hidden_dims_actor = hidden_dims_actor or []
+        hidden_dims_q = hidden_dims_q or []
+
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.activation = activation
+        self.recurrent_type = recurrent_type
+        self.recurrent_kwargs = dict(recurrent_kwargs or {})
+
+        self.layers = torch.nn.ModuleList()
+        prev = state_dim
+        for h in hidden_dims:
+            self.layers.append(_build_recurrent_cell(prev, h, activation, recurrent_type, self.recurrent_kwargs))
+            prev = h
+
+        self.actor = RecurrentNetwork(
+            prev,
+            action_dim,
+            hidden_dims=hidden_dims_actor,
+            activation=activation,
+            recurrent_type=recurrent_type,
+            recurrent_kwargs=self.recurrent_kwargs,
+        )
+        self.q_head = RecurrentNetwork(
+            prev,
+            action_dim,
+            hidden_dims=hidden_dims_q,
+            activation=activation,
+            recurrent_type=recurrent_type,
+            recurrent_kwargs=self.recurrent_kwargs,
+        )
+
+    def reset(self, batch_size: int = 1):
+        device = next(self.parameters()).device
+        dtype = next(self.parameters()).dtype
+        for layer in self.layers:
+            layer.reset(batch_size, device=device, dtype=dtype)
+        self.actor.reset(batch_size, device=device, dtype=dtype)
+        self.q_head.reset(batch_size, device=device, dtype=dtype)
+
+    def forward(self, x):
+        z = x.view(-1, self.state_dim)
+        for layer in self.layers:
+            z = self.activation(layer(z))
+        return z
+
+    def a(self, x):
+        return self.actor(self.forward(x))
+
+    def q(self, x):
+        return self.q_head(self.forward(x))
+
+    def v(self, x):
+        logits, q_values = self.aq(x)
+        return _expected_q(logits, q_values).unsqueeze(-1)
+
+    def aq(self, x):
+        z = self.forward(x)
+        return self.actor(z), self.q_head(z)
+
+    def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        trunk = [cell.get_state(clone=clone, detach=detach) for cell in self.layers]
+        actor = self.actor.get_states(clone=clone, detach=detach)
+        q_head = self.q_head.get_states(clone=clone, detach=detach)
+        return {"trunk": trunk, "actor": actor, "q": q_head}
+
+    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+        if strict:
+            for key in ("trunk", "actor", "q"):
+                if key not in states:
+                    raise KeyError(f"Missing key '{key}' in states snapshot.")
+
+        trunk_states = states.get("trunk", [])
+        actor_states = states.get("actor", [])
+        q_states = states.get("q", [])
+
+        if strict and len(trunk_states) != len(self.layers):
+            raise ValueError(f"Expected {len(self.layers)} trunk states, got {len(trunk_states)}.")
+
+        for cell, state in zip(self.layers, trunk_states):
+            cell.set_state(state, clone=clone, detach=detach)
+
+        self.actor.set_states(actor_states, clone=clone, detach=detach, strict=strict)
+        self.q_head.set_states(q_states, clone=clone, detach=detach, strict=strict)
 
 
 class RolloutBuffer:
-
     def __init__(self):
         self.clear()
 
@@ -26,20 +275,22 @@ class RolloutBuffer:
         return len(self.states)
 
     def to_tensors(self, device, dtype):
-        states     = torch.stack(self.states).to(device=device, dtype=dtype)
-        actions    = torch.stack(self.actions).to(device=device, dtype=dtype)
-        rewards    = torch.stack(self.rewards).to(device=device, dtype=dtype)
-        dones      = torch.stack(self.dones).to(device=device, dtype=dtype)
+        states = torch.stack(self.states).to(device=device, dtype=dtype)
+        actions = torch.stack(self.actions).to(device=device, dtype=dtype)
+        rewards = torch.stack(self.rewards).to(device=device, dtype=dtype)
+        dones = torch.stack(self.dones).to(device=device, dtype=dtype)
         return states, actions, rewards, dones
 
 
-class VACAgent:
+class VAQAgent:
     """
-    Vanilla Actor-Critic for discrete actions (on-policy):
+    Vanilla Actor-Q Critic for discrete actions (on-policy):
       - Policy: Categorical(logits)
-      - Critic: TD(0) bootstrap target y_t = r_t + gamma * (1-done_t) * V(s_{t+1})
+      - Critic: TD(0) bootstrap target y_t = r_t + gamma * (1-done_t) * V_pi(s_{t+1})
+                where V_pi(s) = sum_a pi(a|s) Q(s,a)
       - Actor:  -(logpi(a_t|s_t) * A_t) - ent_coef * H[pi(.|s_t)]
-      - Critic: 0.5 * (y_t - V(s_t))^2
+                with A_t = Q(s_t,a_t) - V_pi(s_t)
+      - Critic: 0.5 * (y_t - Q(s_t,a_t))^2
     """
 
     def __init__(
@@ -58,10 +309,10 @@ class VACAgent:
         # network properties
         hidden_dims: tuple[int] = [256, 256],
         hidden_dims_actor: list[int] = [256],
-        hidden_dims_value: list[int] = [256],
+        hidden_dims_q: list[int] = [256],
         activation: callable = torch.relu,
         dtype: torch.dtype = torch.float32,
-        device: str = "cpu"
+        device: str = "cpu",
     ):
         self.gamma = gamma
         self.k_epochs = k_epochs
@@ -73,35 +324,25 @@ class VACAgent:
         self.dtype = dtype
         self.device = torch.device(device)
 
-        # environment dimensions
         self.state_dim = state_dim
         self.action_dim = action_dim
 
-        # network
-        self.net = ActionValueNetwork(
+        self.net = ActionQNetwork(
             state_dim=state_dim,
             action_dim=action_dim,
             hidden_dims=hidden_dims,
             hidden_dims_actor=hidden_dims_actor,
-            hidden_dims_value=hidden_dims_value,
+            hidden_dims_q=hidden_dims_q,
             activation=activation,
         ).to(device=self.device, dtype=self.dtype)
 
-        # on-policy buffer
         self.buffer = RolloutBuffer()
 
     def infer_dist_from_seq(self, state: torch.Tensor) -> tuple[distributions.Categorical, torch.Tensor]:
-        logits, val = self.net.av(state)
-        val = val.squeeze(-1) if val.dim() > 1 else val
-        return distributions.Categorical(logits=logits), val
+        logits, q_values = self.net.aq(state)
+        return distributions.Categorical(logits=logits), q_values
 
     def act(self, state: torch.Tensor, explore: bool = False, grad_enabled: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        state: shape (state_dim,) or (1, state_dim)
-        returns:
-          - action index tensor
-          - log_prob tensor
-        """
         with torch.set_grad_enabled(grad_enabled):
             state = state.to(dtype=self.dtype, device=self.device)
 
@@ -135,28 +376,27 @@ class VACAgent:
             raise RuntimeError("Call init_optimizer(...) before update().")
 
         if len(self.buffer) == 0:
-            return {"policy_objective": [0.0], "critic_loss": [0.0], "entropy": [0.0]}
+            return _empty_update_metrics()
 
-        policy_objectives = []
-        critic_losses = []
-        entropy_losses = []
+        metrics = _init_update_metrics()
 
-        advantages, targets, states, actions = self.compute_td0_advantages(
+        advantages, raw_advantages, targets, states, actions = self.compute_td0_advantages(
             last_next_state=last_next_state,
             last_done=last_done,
         )
 
         for _ in range(k_epochs):
-            dist, values_pred = self.infer_dist_from_seq(states)
+            dist, q_values_pred = self.infer_dist_from_seq(states)
             actions_long = actions.long()
 
             log_probs = dist.log_prob(actions_long)
             entropy = dist.entropy().mean()
+            q_taken_pred = _selected_q(q_values_pred, actions_long)
 
             adv = advantages.detach()
             policy_objective = (log_probs * adv).mean()
 
-            td = targets.detach() - values_pred
+            td = targets.detach() - q_taken_pred
             critic_loss = 0.5 * td.pow(2).mean()
 
             loss = -policy_objective + self.vf_coef * critic_loss - self.ent_coef * entropy
@@ -169,51 +409,56 @@ class VACAgent:
 
             self.optim.step()
 
-            policy_objectives.append(float(policy_objective.detach().cpu().item()))
-            critic_losses.append(float(critic_loss.detach().cpu().item()))
-            entropy_losses.append(float(entropy.detach().cpu().item()))
+            _append_update_metrics(
+                metrics,
+                logits=dist.logits,
+                log_probs=log_probs,
+                q_values_pred=q_values_pred,
+                q_taken_pred=q_taken_pred,
+                targets=targets,
+                raw_advantages=raw_advantages,
+                policy_objective=policy_objective,
+                critic_loss=critic_loss,
+                entropy=entropy,
+                loss=loss,
+            )
 
-        return {
-            "policy_objective": policy_objectives,
-            "critic_loss": critic_losses,
-            "entropy": entropy_losses,
-        }
+        return metrics
 
     def compute_td0_advantages(
         self,
         last_next_state: torch.Tensor,
         last_done: bool | torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        TD(0) targets:
-          y_t = r_t + gamma * (1-done_t) * V(s_{t+1})
-        Advantage:
-          A_t = y_t - V(s_t)
-        """
-        # unpack rollout
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         states, actions, rewards, dones = self.buffer.to_tensors(self.device, self.dtype)
 
-        # ensure shapes are (T,)
         actions = actions.squeeze(-1) if actions.dim() > 1 else actions
         rewards = rewards.squeeze(-1) if rewards.dim() > 1 else rewards
         dones = dones.squeeze(-1) if dones.dim() > 1 else dones
+
         with torch.no_grad():
             last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
-            values = self.net.v(torch.concat([states, last_next_state[None]], dim=0))
-            values = values.squeeze(-1) if values.dim() > 1 else values  # (T+1,)
+            logits, q_values = self.net.aq(torch.concat([states, last_next_state[None]], dim=0))
 
-            v_t = values[:-1]
-            v_tp1 = values[1:]
+            logits_t = logits[:-1]
+            logits_tp1 = logits[1:]
+            q_t = q_values[:-1]
+            q_tp1 = q_values[1:]
+
+            q_taken = _selected_q(q_t, actions)
+            v_t = _expected_q(logits_t, q_t)
+            v_tp1 = _expected_q(logits_tp1, q_tp1)
 
             targets = rewards + self.gamma * (1.0 - dones) * v_tp1
-            advantages = targets - v_t
+            raw_advantages = q_taken - v_t
+            advantages = raw_advantages
 
             if self.normalize_advantages:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
             if self.normalize_returns:
                 targets = (targets - targets.mean()) / (targets.std() + 1e-7)
 
-        return advantages, targets, states, actions
+        return advantages, raw_advantages, targets, states, actions
 
     def save(self, path: str):
         torch.save({
@@ -225,18 +470,19 @@ class VACAgent:
         self.net.load_state_dict(ckpt["network"], strict=strict)
 
     def train_on_historical(
-            self, env, data,
-            n_episodes,
-            update_interval=100,
-            n_updates=1,
-            max_steps=2000,
-            warm_up=0,
-            lr=3e-4,
-            optim="AdamW",
-            init_optimizer=True,
-            store_results=True,
-        ):
-        # initialize optimizer
+        self,
+        env,
+        data,
+        n_episodes,
+        update_interval=100,
+        n_updates=1,
+        max_steps=2000,
+        warm_up=0,
+        lr=3e-4,
+        optim="AdamW",
+        init_optimizer=True,
+        store_results=True,
+    ):
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
@@ -320,20 +566,22 @@ class VACAgent:
         return total_loss, total_reward, total_info
 
 
-class RecurrentVACAgent:
+class RecurrentVAQAgent:
     """
-    Recurrent Vanilla Actor-Critic for discrete actions:
+    Recurrent Vanilla Actor-Q Critic for discrete actions:
       - Policy: Categorical(logits) from recurrent actor head
-      - Critic: recurrent TD(0) bootstrap with sequence-consistent V(s_t), V(s_{t+1})
+      - Critic: recurrent TD(0) bootstrap with V_pi(s_t), V_pi(s_{t+1})
+                derived from recurrent Q(s_t,.)
       - Actor:  -(logpi(a_t|s_t) * A_t) - ent_coef * H[pi(.|s_t)]
-      - Critic: 0.5 * (y_t - V(s_t))^2
+                with A_t = Q(s_t,a_t) - V_pi(s_t)
+      - Critic: 0.5 * (y_t - Q(s_t,a_t))^2
     """
 
     def __init__(
         self,
         state_dim: int,
         action_dim: int,
-        # vac properties
+        # vaq properties
         gamma: float = 0.999,
         vf_coef: float = 0.5,
         ent_coef: float = 0.01,
@@ -341,12 +589,12 @@ class RecurrentVACAgent:
         # network properties
         hidden_dims: tuple[int] = [256, 256],
         hidden_dims_actor: list[int] = [256],
-        hidden_dims_value: list[int] = [256],
+        hidden_dims_q: list[int] = [256],
         activation: callable = torch.relu,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
         dtype: torch.dtype = torch.float32,
-        device: str = "cpu"
+        device: str = "cpu",
     ):
         self.gamma = gamma
         self.vf_coef = vf_coef
@@ -355,61 +603,40 @@ class RecurrentVACAgent:
         self.dtype = dtype
         self.device = torch.device(device)
 
-        # environment dimensions
         self.state_dim = state_dim
         self.action_dim = action_dim
 
-        # network
-        self.net = RecurrentActionValueNetwork(
+        self.net = RecurrentActionQNetwork(
             state_dim=state_dim,
             action_dim=action_dim,
             hidden_dims=hidden_dims,
             hidden_dims_actor=hidden_dims_actor,
-            hidden_dims_value=hidden_dims_value,
+            hidden_dims_q=hidden_dims_q,
             activation=activation,
             recurrent_type=recurrent_type,
             recurrent_kwargs=recurrent_kwargs,
         ).to(device=self.device, dtype=self.dtype)
 
-        # on-policy buffer
         self.buffer = RolloutBuffer()
         self.net.reset(1)
 
     def infer_dist(self, state: torch.Tensor) -> distributions.Categorical:
         logits = self.net.a(state)
-        
         return distributions.Categorical(logits=logits)
-
-    def infer_vals(self, state: torch.Tensor) -> torch.Tensor:
-        val = self.net.v(state)
-
-        return val.squeeze(-1) if val.dim() > 1 else val
-
-    def infer_vals_from_seq(self, state_seq: torch.Tensor, h0: dict | None = None) -> torch.Tensor:
-        if h0 is not None:
-            self.net.set_states(h0, strict=False)
-
-        vals = []
-        for state in state_seq:
-            val = self.net.v(state)
-            vals.append(val.squeeze())
-        vals = torch.stack(vals, dim=0)
-
-        return vals
 
     def infer_dist_from_seq(self, state_seq: torch.Tensor, h0: dict | None = None) -> tuple[distributions.Categorical, torch.Tensor]:
         if h0 is not None:
             self.net.set_states(h0, strict=False)
 
-        logits_seq, vals = [], []
+        logits_seq, q_seq = [], []
         for state in state_seq:
-            logits, val = self.net.av(state)
+            logits, q_values = self.net.aq(state)
             logits_seq.append(logits.squeeze())
-            vals.append(val.squeeze())
+            q_seq.append(q_values.squeeze())
         logits_seq = torch.stack(logits_seq, dim=0)
-        vals = torch.stack(vals, dim=0)
+        q_seq = torch.stack(q_seq, dim=0)
 
-        return distributions.Categorical(logits=logits_seq), vals
+        return distributions.Categorical(logits=logits_seq), q_seq
 
     def act(self, state: torch.Tensor, explore: bool = False, grad_enabled: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         with torch.set_grad_enabled(grad_enabled):
@@ -439,33 +666,33 @@ class RecurrentVACAgent:
         last_next_state: torch.Tensor,
         k_epochs: int = 1,
         h0: dict | None = None,
-        max_grad_norm: float | None = None
-    ) -> dict[str, float]:
+        max_grad_norm: float | None = None,
+    ) -> dict[str, list[float]]:
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
 
         if len(self.buffer) == 0:
-            return {"actor_loss": 0.0, "critic_loss": 0.0, "entropy": 0.0}
+            return _empty_update_metrics()
 
-        actor_losses = []
-        critic_losses = []
-        entropy_losses = []
+        metrics = _init_update_metrics()
 
-        advantages, targets, states, actions = self.compute_td0_advantages(
-            last_next_state=last_next_state, h0=h0
+        advantages, raw_advantages, targets, states, actions = self.compute_td0_advantages(
+            last_next_state=last_next_state,
+            h0=h0,
         )
 
         for _ in range(k_epochs):
-            dists, values_pred = self.infer_dist_from_seq(states, h0=h0)
+            dists, q_values_pred = self.infer_dist_from_seq(states, h0=h0)
             actions_long = actions.long()
 
             log_probs = dists.log_prob(actions_long)
             entropy = dists.entropy().mean()
+            q_taken_pred = _selected_q(q_values_pred, actions_long)
 
             adv = advantages.detach()
             policy_objective = (log_probs * adv).mean()
 
-            td = targets.detach() - values_pred
+            td = targets.detach() - q_taken_pred
             critic_loss = 0.5 * td.pow(2).mean()
 
             loss = -policy_objective + self.vf_coef * critic_loss - self.ent_coef * entropy
@@ -478,26 +705,27 @@ class RecurrentVACAgent:
 
             self.optim.step()
 
-            actor_losses.append(float(policy_objective.detach().cpu().item()))
-            critic_losses.append(float(critic_loss.detach().cpu().item()))
-            entropy_losses.append(float(entropy.detach().cpu().item()))
+            _append_update_metrics(
+                metrics,
+                logits=dists.logits,
+                log_probs=log_probs,
+                q_values_pred=q_values_pred,
+                q_taken_pred=q_taken_pred,
+                targets=targets,
+                raw_advantages=raw_advantages,
+                policy_objective=policy_objective,
+                critic_loss=critic_loss,
+                entropy=entropy,
+                loss=loss,
+            )
 
-        return {
-            "policy_objective": actor_losses,
-            "critic_loss": critic_losses,
-            "entropy": entropy_losses,
-        }
+        return metrics
 
     def compute_td0_advantages(
         self,
         last_next_state: torch.Tensor,
         h0: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        TD(0) with recurrence:
-          y_t = r_t + gamma * (1-done_t) * V(s_{t+1})
-          A_t = y_t - V(s_t)
-        """
         states, actions, rewards, dones = self.buffer.to_tensors(self.device, self.dtype)
         actions = actions.squeeze(-1) if actions.dim() > 1 else actions
         rewards = rewards.squeeze(-1) if rewards.dim() > 1 else rewards
@@ -506,36 +734,44 @@ class RecurrentVACAgent:
         last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
 
         with torch.no_grad():
-            # values for s_0..s_T (append last_next_state for bootstrap)
-            values = self.infer_vals_from_seq(
-                torch.concat([states, last_next_state[None]], dim=0), h0=h0
-            )  # shape (T+1,)
+            dists, q_values = self.infer_dist_from_seq(
+                torch.concat([states, last_next_state[None]], dim=0),
+                h0=h0,
+            )
 
-            v_t = values[:-1]
-            v_tp1 = values[1:]
+            logits_t = dists.logits[:-1]
+            logits_tp1 = dists.logits[1:]
+            q_t = q_values[:-1]
+            q_tp1 = q_values[1:]
+
+            q_taken = _selected_q(q_t, actions)
+            v_t = _expected_q(logits_t, q_t)
+            v_tp1 = _expected_q(logits_tp1, q_tp1)
 
             targets = rewards + self.gamma * (1.0 - dones) * v_tp1
-            advantages = targets - v_t
+            raw_advantages = q_taken - v_t
+            advantages = raw_advantages
 
             if self.normalize_advantages:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
 
-        return advantages, targets, states, actions
+        return advantages, raw_advantages, targets, states, actions
 
     def train_on_historical(
-            self, env, data,
-            n_episodes,
-            max_steps=2000,
-            warm_up=0,
-            update_interval=100,
-            n_updates=1,
-            lr=3e-4,
-            optim="AdamW",
-            init_optimizer=False,
-            store_results=True,
-            max_grad_norm=None
-        ):
-        # initialize optimizer
+        self,
+        env,
+        data,
+        n_episodes,
+        max_steps=2000,
+        warm_up=0,
+        update_interval=100,
+        n_updates=1,
+        lr=3e-4,
+        optim="AdamW",
+        init_optimizer=False,
+        store_results=True,
+        max_grad_norm=None,
+    ):
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
@@ -584,7 +820,7 @@ class RecurrentVACAgent:
                             last_next_state=next_state.to_tensor(),
                             k_epochs=n_updates,
                             h0=h0,
-                            max_grad_norm=max_grad_norm
+                            max_grad_norm=max_grad_norm,
                         )
                         self.net.set_states(h0 := h_t, clone=True, detach=True)
                         self.buffer.clear()
@@ -616,9 +852,7 @@ class RecurrentVACAgent:
             if store_results and len(episode_loss) > 0:
                 keys = episode_loss[0].keys()
                 for key in keys:
-                    msg += f" - {key}: {sum(
-                        sum(ld[key]) / len(ld[key]) for ld in episode_loss
-                    ) / len(episode_loss):.5f}"
+                    msg += f" - {key}: {sum(sum(ld[key]) / len(ld[key]) for ld in episode_loss) / len(episode_loss):.5f}"
             print(msg)
 
         return total_loss, total_reward, total_info

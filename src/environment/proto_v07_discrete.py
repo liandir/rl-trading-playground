@@ -76,6 +76,10 @@ class MultiCurrencyEnv:
     Invalid trades:
         If an action cannot be executed meaningfully (too little cash, no position,
         proceeds <= fee, below minimum buy size, etc.), a penalty is applied.
+
+    Episode termination:
+        If portfolio value falls to the bankruptcy threshold or below, the episode
+        ends and a configurable penalty is applied.
     """
 
     def __init__(
@@ -98,6 +102,7 @@ class MultiCurrencyEnv:
         reward_mode: str = "log",
         size_buckets: Tuple[float, ...] = (0.50, 1.00),
         invalid_trade_penalty: float = 0.0,
+        done_reward_penalty: float = 10.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
     ):
@@ -125,6 +130,7 @@ class MultiCurrencyEnv:
         self.roi_coeff = float(roi_coeff)
         self.reward_mode = reward_mode
         self.invalid_trade_penalty = float(invalid_trade_penalty)
+        self.done_reward_penalty = float(done_reward_penalty)
 
         self.s_fee = float(sell_fee)
         self.b_fee = float(buy_fee)
@@ -511,7 +517,7 @@ class MultiCurrencyEnv:
 
         done = float(self.V) <= self.bankruptcy_threshold
         if done:
-            reward -= 10.0
+            reward -= self.done_reward_penalty
 
         info = {
             "t": self.t,

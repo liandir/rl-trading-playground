@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from src.agent.buffer import Buffer
-from src.network.recurrent import RecurrentNetwork
+from src.network.recurrent import RecurrentNetwork, RecurrentState
 
 
 class RecurrentDQNAgent:
@@ -27,6 +27,7 @@ class RecurrentDQNAgent:
         hidden_dims: tuple[int] = [256, 256],
         activation: callable = torch.tanh,
         recurrent_type: str = "simple",
+        recurrent_kwargs: dict | None = None,
         dtype: torch.dtype = torch.float32,
         device: str = "cpu"
     ):
@@ -55,6 +56,7 @@ class RecurrentDQNAgent:
             hidden_dims=hidden_dims,
             activation=activation,
             recurrent_type=recurrent_type,
+            recurrent_kwargs=recurrent_kwargs,
         ).to(device=self.device, dtype=self.dtype)
 
         self.target_net = copy.deepcopy(self.net).to(device=self.device, dtype=self.dtype)
@@ -75,7 +77,7 @@ class RecurrentDQNAgent:
         q = self.net(state)
         return q.squeeze(0) if q.shape[0] == 1 else q
 
-    def infer_q_from_seq(self, state_seq: torch.Tensor, h0: list[torch.Tensor] | None = None) -> torch.Tensor:
+    def infer_q_from_seq(self, state_seq: torch.Tensor, h0: list[RecurrentState] | None = None) -> torch.Tensor:
         if h0 is not None:
             self.net.set_states(h0, strict=False)
 
@@ -142,7 +144,7 @@ class RecurrentDQNAgent:
         opt_cls = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
-    def update(self, h0: list[torch.Tensor] | None = None, max_grad_norm: float | None = None) -> dict[str, float]:
+    def update(self, h0: list[RecurrentState] | None = None, max_grad_norm: float | None = None) -> dict[str, float]:
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
 

@@ -351,6 +351,8 @@ class RecurrentPPOAgent:
         hidden_dims_actor: list[int] = [256],
         hidden_dims_value: list[int] = [256],
         activation: callable = torch.relu,
+        recurrent_type: str = "simple",
+        recurrent_kwargs: dict | None = None,
         dtype: torch.dtype = torch.float32,
         device: str = "cpu"
     ):
@@ -375,6 +377,8 @@ class RecurrentPPOAgent:
             hidden_dims_actor=hidden_dims_actor,
             hidden_dims_value=hidden_dims_value,
             activation=activation,
+            recurrent_type=recurrent_type,
+            recurrent_kwargs=recurrent_kwargs,
         ).to(device=self.device, dtype=self.dtype)
 
         # learnable log std (one per action dim), like your prototype

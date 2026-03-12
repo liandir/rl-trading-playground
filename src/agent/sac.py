@@ -265,6 +265,7 @@ class RecurrentDiscreteSACNetwork(torch.nn.Module):
         hidden_dims_critic: tuple[int, ...] | list[int] | None = None,
         activation: callable = torch.relu,
         recurrent_type: str = "simple",
+        recurrent_kwargs: dict | None = None,
     ):
         super().__init__()
         hidden_dims = _as_hidden_dims(hidden_dims)
@@ -275,11 +276,14 @@ class RecurrentDiscreteSACNetwork(torch.nn.Module):
         self.action_dim = action_dim
         self.activation = activation
         self.recurrent_type = recurrent_type
+        self.recurrent_kwargs = dict(recurrent_kwargs or {})
 
         self.layers = torch.nn.ModuleList()
         prev = state_dim
         for hidden_dim in hidden_dims:
-            self.layers.append(_build_recurrent_cell(prev, hidden_dim, activation, recurrent_type))
+            self.layers.append(
+                _build_recurrent_cell(prev, hidden_dim, activation, recurrent_type, self.recurrent_kwargs)
+            )
             prev = hidden_dim
 
         self.actor = RecurrentNetwork(
@@ -288,6 +292,7 @@ class RecurrentDiscreteSACNetwork(torch.nn.Module):
             hidden_dims=hidden_dims_actor,
             activation=activation,
             recurrent_type=recurrent_type,
+            recurrent_kwargs=self.recurrent_kwargs,
         )
         self.q1 = RecurrentNetwork(
             prev,
@@ -295,6 +300,7 @@ class RecurrentDiscreteSACNetwork(torch.nn.Module):
             hidden_dims=hidden_dims_critic,
             activation=activation,
             recurrent_type=recurrent_type,
+            recurrent_kwargs=self.recurrent_kwargs,
         )
         self.q2 = RecurrentNetwork(
             prev,
@@ -302,6 +308,7 @@ class RecurrentDiscreteSACNetwork(torch.nn.Module):
             hidden_dims=hidden_dims_critic,
             activation=activation,
             recurrent_type=recurrent_type,
+            recurrent_kwargs=self.recurrent_kwargs,
         )
 
     def reset(self, batch_size: int = 1):
@@ -316,7 +323,7 @@ class RecurrentDiscreteSACNetwork(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         z = x.view(-1, self.state_dim)
         for layer in self.layers:
-            z = self.activation(layer(z))
+            z = layer(z)
         return z
 
     def pi(self, x: torch.Tensor) -> torch.Tensor:
@@ -876,6 +883,7 @@ class RecurrentSACAgent(_BaseDiscreteSACAgent):
         hidden_dims_critic: tuple[int, ...] = (),
         activation: callable = torch.relu,
         recurrent_type: str = "simple",
+        recurrent_kwargs: dict | None = None,
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
     ):
@@ -887,6 +895,7 @@ class RecurrentSACAgent(_BaseDiscreteSACAgent):
             hidden_dims_critic=hidden_dims_critic,
             activation=activation,
             recurrent_type=recurrent_type,
+            recurrent_kwargs=recurrent_kwargs,
         )
         super().__init__(
             network=network,
