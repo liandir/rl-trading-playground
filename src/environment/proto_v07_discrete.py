@@ -11,6 +11,7 @@ PI = 3.141592653589793238462
 class State:
     time: torch.Tensor            # [6]    cyclic time features
     p_rel: torch.Tensor           # [M, N]
+    hl_rel: torch.Tensor          # [N]    symmetric high-low range
     x_rel: torch.Tensor           # [N+1]  exposure: cash + value weights
     c_rel: torch.Tensor           # [N]    invested weights, stable
     rho: torch.Tensor             # []     overall commitment
@@ -21,6 +22,7 @@ class State:
         return torch.cat([
             self.time.flatten(),
             self.p_rel.flatten(),
+            self.hl_rel.flatten(),
             self.x_rel.flatten(),
             self.c_rel.flatten(),
             self.rho.view(1),
@@ -42,10 +44,13 @@ class StateHistory:
     def get_p_rel(self) -> torch.Tensor:
         return torch.stack([s.p_rel for s in self.states])
 
+    def get_hl_rel(self) -> torch.Tensor:
+        return torch.stack([s.hl_rel for s in self.states])
+
     def get_x_rel(self) -> torch.Tensor:
         return torch.stack([s.x_rel for s in self.states])
 
-    def get_v(self) -> torch.Tensor:
+    def get_v_rel(self) -> torch.Tensor:
         return torch.stack([s.v_rel for s in self.states])
 
     def to_tensor(self) -> torch.Tensor:
@@ -146,8 +151,8 @@ class MultiCurrencyEnv:
         self.size_buckets = torch.tensor(size_buckets, dtype=self.dtype)
         self.K = int(self.size_buckets.numel())
 
-        # state = time(6) + p_rel(M*N) + x_rel(N+1) + c_rel(N) + rho(1) + mny(N) + v_rel(N)
-        self.state_dim = self.M * N + 4 * N + 8
+        # state = time(6) + p_rel(M*N) + hl_rel(N) + x_rel(N+1) + c_rel(N) + rho(1) + mny(N) + v_rel(N)
+        self.state_dim = self.M * N + 5 * N + 8
 
         # discrete actions: hold + buys + sells
         self.action_dim = 1 + 2 * self.N * self.K
@@ -162,6 +167,7 @@ class MultiCurrencyEnv:
         self.v_prev = None
         self.p_smooth = None
         self.p_rel = None
+        self.hl_rel = None
         self.v_rel = None
         self.V_prev = None
         self.invested = None
@@ -247,6 +253,30 @@ class MultiCurrencyEnv:
         m[has_pos] = (self.p[has_pos] - avg_cost[has_pos]) / (avg_cost[has_pos] + self.eps)
         return m
 
+    def _compute_hl_rel(self, high: torch.Tensor, low: torch.Tensor) -> torch.Tensor:
+        return 2.0 * (high - low) / (high + low + self.eps)
+
+    def _get_market_inputs(self, data: dict) -> tuple[float, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if "close" not in data:
+            raise KeyError("data must contain 'close'")
+        if "high" not in data:
+            raise KeyError("data must contain 'high'")
+        if "low" not in data:
+            raise KeyError("data must contain 'low'")
+        if "volume" not in data:
+            raise KeyError("data must contain 'volume'")
+
+        close  = data["close"].to(self.dtype).reshape(-1)
+        high   = data["high"].to(self.dtype).reshape(-1)
+        low    = data["low"].to(self.dtype).reshape(-1)
+        volume = data["volume"].to(self.dtype).reshape(-1)
+
+        for name, value in (("close", close), ("volume", volume), ("high", high), ("low", low)):
+            if value.numel() != self.N:
+                raise ValueError(f"data['{name}'] must have {self.N} elements, got {value.numel()}")
+
+        return float(data["time"]), close, high, low, volume
+
     def _avg_cost_per_unit(self) -> torch.Tensor:
         avg = torch.zeros(self.N, dtype=self.dtype)
         has = self.w > self.eps
@@ -272,6 +302,7 @@ class MultiCurrencyEnv:
         return State(
             time=t_vec,
             p_rel=self.p_rel.clone(),
+            hl_rel=self.hl_rel.clone(),
             v_rel=self.v_rel.clone(),
             x_rel=x_rel,
             c_rel=c_rel,
@@ -298,10 +329,12 @@ class MultiCurrencyEnv:
         self.C = torch.tensor(self.C0, dtype=self.dtype)
         self.w = torch.zeros(self.N, dtype=self.dtype)
 
-        self.t = float(data["time"])
+        t, close, high, low, volume = self._get_market_inputs(data)
+
+        self.t = t
         self.dt = 0.0
-        self.p = data["prices"].to(self.dtype).clone()
-        self.v = data["volume"].to(self.dtype).clone()
+        self.p = close.clone()
+        self.v = volume.clone()
         if self.use_dollar_volume:
             self.v *= self.p
 
@@ -309,6 +342,7 @@ class MultiCurrencyEnv:
 
         self.p_smooth = self.p[None, :].repeat(self.M, 1).clone()
         self.p_rel = torch.zeros((self.M, self.N), dtype=self.dtype)
+        self.hl_rel = self._compute_hl_rel(high, low)
         self.v_rel = torch.zeros((self.N,), dtype=self.dtype)
 
         self.V_prev = self.V.detach().clone()
@@ -331,14 +365,14 @@ class MultiCurrencyEnv:
     def _update(self, data: dict) -> None:
         self.V_prev = self.V.detach().clone()
 
-        t_new = float(data["time"])
+        t_new, close, high, low, volume = self._get_market_inputs(data)
         if t_new < self.t:
             print("WARNING: dt < 0 - setting to zero!")
 
         self.dt = (t_new - self.t) * float(t_new > self.t)
         self.t = t_new
 
-        p_new = data["prices"].to(self.dtype)
+        p_new = close
         if self.tau_p_live is None:
             self.p[:] = p_new
         else:
@@ -348,9 +382,10 @@ class MultiCurrencyEnv:
         alpha_p = 1 - torch.exp(-self.dt / self.tau_p.clamp(min=self.eps))[:, None]
         self.p_smooth += alpha_p * (self.p[None, :] - self.p_smooth)
         self.p_rel = (self.p[None, :] - self.p_smooth) / self.p_smooth.clamp(min=self.eps)
+        self.hl_rel[:] = self._compute_hl_rel(high, low)
 
         self.v_prev[:] = self.v.clone()
-        self.v[:] = data["volume"].to(self.dtype)
+        self.v[:] = volume
         if self.use_dollar_volume:
             self.v[:] *= self.p
 
