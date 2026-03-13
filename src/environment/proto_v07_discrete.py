@@ -494,7 +494,9 @@ class MultiCurrencyEnv:
 
     def _reward(self, valid_trade: bool) -> float:
         if self.realized_cost.sum() > 0.0:
-            reward = self.roi_coeff * (self.realized_pnl.sum() / self.realized_cost.sum()).item()
+            reward = (self.realized_pnl.sum() / self.realized_cost.sum()).item()
+            if reward > 0:
+                reward *= self.roi_coeff
         else:
             if self.reward_mode == "return":
                 reward = self.val_coeff * ((self.V - self.V_prev) / self.V_prev).detach().item()

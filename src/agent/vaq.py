@@ -100,6 +100,8 @@ def _append_update_metrics(
 
 
 class ActionQNetwork(torch.nn.Module):
+    """Shared feedforward trunk with categorical-policy and discrete-Q heads."""
+
     def __init__(
         self,
         state_dim,
@@ -138,24 +140,12 @@ class ActionQNetwork(torch.nn.Module):
         z = x.view(-1, self.state_dim)
         for layer in self.layers:
             z = self.activation(layer(z))
-        return z
-
-    def a(self, x):
-        return self.actor(self.forward(x))
-
-    def q(self, x):
-        return self.q_head(self.forward(x))
-
-    def v(self, x):
-        logits, q_values = self.aq(x)
-        return _expected_q(logits, q_values).unsqueeze(-1)
-
-    def aq(self, x):
-        z = self.forward(x)
         return self.actor(z), self.q_head(z)
 
 
 class RecurrentActionQNetwork(torch.nn.Module):
+    """Shared recurrent trunk with categorical-policy and discrete-Q heads."""
+
     def __init__(
         self,
         state_dim,
@@ -213,20 +203,6 @@ class RecurrentActionQNetwork(torch.nn.Module):
         z = x.view(-1, self.state_dim)
         for layer in self.layers:
             z = self.activation(layer(z))
-        return z
-
-    def a(self, x):
-        return self.actor(self.forward(x))
-
-    def q(self, x):
-        return self.q_head(self.forward(x))
-
-    def v(self, x):
-        logits, q_values = self.aq(x)
-        return _expected_q(logits, q_values).unsqueeze(-1)
-
-    def aq(self, x):
-        z = self.forward(x)
         return self.actor(z), self.q_head(z)
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
@@ -284,13 +260,20 @@ class RolloutBuffer:
 
 class VAQAgent:
     """
-    Vanilla Actor-Q Critic for discrete actions (on-policy):
-      - Policy: Categorical(logits)
-      - Critic: TD(0) bootstrap target y_t = r_t + gamma * (1-done_t) * V_pi(s_{t+1})
-                where V_pi(s) = sum_a pi(a|s) Q(s,a)
-      - Actor:  -(logpi(a_t|s_t) * A_t) - ent_coef * H[pi(.|s_t)]
-                with A_t = Q(s_t,a_t) - V_pi(s_t)
-      - Critic: 0.5 * (y_t - Q(s_t,a_t))^2
+    On-policy discrete actor-critic with a Q critic.
+
+    The network shares a feedforward trunk and splits into:
+      - an actor head that parameterizes a categorical policy
+      - a critic head that predicts Q(s, .) for every discrete action
+
+    Training uses TD(0) targets with the policy expectation as the bootstrap:
+      - y_t = r_t + gamma * (1 - done_t) * V_pi(s_{t+1})
+      - V_pi(s) = sum_a pi(a | s) Q(s, a)
+      - A_t = Q(s_t, a_t) - V_pi(s_t)
+
+    `update()` returns per-epoch metric lists for the actor objective, critic
+    loss, entropy, TD-error statistics, Q/value scale, policy confidence,
+    explained variance, and raw-advantage diagnostics.
     """
 
     def __init__(
@@ -339,10 +322,11 @@ class VAQAgent:
         self.buffer = RolloutBuffer()
 
     def infer_dist_from_seq(self, state: torch.Tensor) -> tuple[distributions.Categorical, torch.Tensor]:
-        logits, q_values = self.net.aq(state)
+        logits, q_values = self.net(state)
         return distributions.Categorical(logits=logits), q_values
 
-    def act(self, state: torch.Tensor, explore: bool = False, grad_enabled: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+    def act(self, state: torch.Tensor, explore: bool = False, grad_enabled: bool = False) -> torch.Tensor:
+        """Sample or greedily select a discrete action and return only the action tensor."""
         with torch.set_grad_enabled(grad_enabled):
             state = state.to(dtype=self.dtype, device=self.device)
 
@@ -352,11 +336,9 @@ class VAQAgent:
             else:
                 action = torch.argmax(dist.logits, dim=-1).squeeze()
 
-            log_prob = dist.log_prob(action)
-
         if grad_enabled:
-            return action, log_prob
-        return action.cpu(), log_prob.cpu()
+            return action
+        return action.cpu()
 
     def store(self, state, action, reward, done):
         self.buffer.store(state, action, reward, done)
@@ -438,7 +420,7 @@ class VAQAgent:
 
         with torch.no_grad():
             last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
-            logits, q_values = self.net.aq(torch.concat([states, last_next_state[None]], dim=0))
+            logits, q_values = self.net(torch.concat([states, last_next_state[None]], dim=0))
 
             logits_t = logits[:-1]
             logits_tp1 = logits[1:]
@@ -483,6 +465,7 @@ class VAQAgent:
         init_optimizer=True,
         store_results=True,
     ):
+        """Train on contiguous historical rollouts and collect episode-level metric histories."""
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
@@ -504,7 +487,7 @@ class VAQAgent:
             step = 1
             while True:
                 if step > warm_up:
-                    action, log_prob = self.act(state.to_tensor(), explore=True, grad_enabled=False)
+                    action = self.act(state.to_tensor(), explore=True, grad_enabled=False)
                 else:
                     action = None
 
@@ -568,13 +551,22 @@ class VAQAgent:
 
 class RecurrentVAQAgent:
     """
-    Recurrent Vanilla Actor-Q Critic for discrete actions:
-      - Policy: Categorical(logits) from recurrent actor head
-      - Critic: recurrent TD(0) bootstrap with V_pi(s_t), V_pi(s_{t+1})
-                derived from recurrent Q(s_t,.)
-      - Actor:  -(logpi(a_t|s_t) * A_t) - ent_coef * H[pi(.|s_t)]
-                with A_t = Q(s_t,a_t) - V_pi(s_t)
-      - Critic: 0.5 * (y_t - Q(s_t,a_t))^2
+    On-policy recurrent discrete actor-critic with a Q critic.
+
+    The recurrent network shares a recurrent trunk and splits into:
+      - an actor head that parameterizes a categorical policy
+      - a critic head that predicts Q(s, .) for every discrete action
+
+    Training replays each buffered segment from a saved recurrent state `h0` and
+    uses the same TD(0) target and advantage construction as `VAQAgent`:
+      - y_t = r_t + gamma * (1 - done_t) * V_pi(s_{t+1})
+      - V_pi(s) = sum_a pi(a | s) Q(s, a)
+      - A_t = Q(s_t, a_t) - V_pi(s_t)
+
+    `update()` returns the same diagnostic metric set as the feedforward agent.
+    In `train_on_historical()`, `burn_in_updates` skips the first N optimizer
+    updates after warm-up so the recurrent state can move away from the reset
+    state before training begins.
     """
 
     def __init__(
@@ -621,7 +613,7 @@ class RecurrentVAQAgent:
         self.net.reset(1)
 
     def infer_dist(self, state: torch.Tensor) -> distributions.Categorical:
-        logits = self.net.a(state)
+        logits, _ = self.net(state)
         return distributions.Categorical(logits=logits)
 
     def infer_dist_from_seq(self, state_seq: torch.Tensor, h0: dict | None = None) -> tuple[distributions.Categorical, torch.Tensor]:
@@ -630,7 +622,7 @@ class RecurrentVAQAgent:
 
         logits_seq, q_seq = [], []
         for state in state_seq:
-            logits, q_values = self.net.aq(state)
+            logits, q_values = self.net(state)
             logits_seq.append(logits.squeeze())
             q_seq.append(q_values.squeeze())
         logits_seq = torch.stack(logits_seq, dim=0)
@@ -638,7 +630,8 @@ class RecurrentVAQAgent:
 
         return distributions.Categorical(logits=logits_seq), q_seq
 
-    def act(self, state: torch.Tensor, explore: bool = False, grad_enabled: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+    def act(self, state: torch.Tensor, explore: bool = False, grad_enabled: bool = False) -> torch.Tensor:
+        """Sample or greedily select a discrete action and return only the action tensor."""
         with torch.set_grad_enabled(grad_enabled):
             state = state.to(dtype=self.dtype, device=self.device)
 
@@ -648,11 +641,9 @@ class RecurrentVAQAgent:
             else:
                 action = torch.argmax(dist.logits, dim=-1).squeeze()
 
-            log_prob = dist.log_prob(action)
-
         if grad_enabled:
-            return action, log_prob
-        return action.cpu(), log_prob.cpu()
+            return action
+        return action.cpu()
 
     def store(self, state, action, reward, done):
         self.buffer.store(state, action, reward, done)
@@ -745,8 +736,8 @@ class RecurrentVAQAgent:
             q_tp1 = q_values[1:]
 
             q_taken = _selected_q(q_t, actions)
-            v_t = _expected_q(logits_t, q_t)
-            v_tp1 = _expected_q(logits_tp1, q_tp1)
+            v_t     = _expected_q(logits_t, q_t)
+            v_tp1   = _expected_q(logits_tp1, q_tp1)
 
             targets = rewards + self.gamma * (1.0 - dones) * v_tp1
             raw_advantages = q_taken - v_t
@@ -766,12 +757,19 @@ class RecurrentVAQAgent:
         warm_up=0,
         update_interval=100,
         n_updates=1,
+        burn_in_updates=0,
         lr=3e-4,
         optim="AdamW",
         init_optimizer=False,
         store_results=True,
         max_grad_norm=None,
     ):
+        """
+        Train on contiguous historical rollouts with recurrent state carry-over.
+
+        `burn_in_updates` skips the first N ready-to-train rollout updates in
+        each episode while still advancing the true recurrent state.
+        """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
@@ -782,6 +780,7 @@ class RecurrentVAQAgent:
         for episode in range(1, n_episodes + 1):
             start = torch.randint(len(data) - max_steps, size=[1]).item()
             state = env.reset(data[start])
+            burn_in = burn_in_updates
             self.net.reset()
             self.buffer.clear()
             h0 = self.net.get_states(clone=True, detach=True)
@@ -794,7 +793,7 @@ class RecurrentVAQAgent:
             step = 1
             while True:
                 if step > warm_up:
-                    action, log_prob = self.act(state.to_tensor(), explore=True, grad_enabled=False)
+                    action = self.act(state.to_tensor(), explore=True, grad_enabled=False)
                 else:
                     action = None
 
@@ -814,30 +813,36 @@ class RecurrentVAQAgent:
 
                     rollout_ready = len(self.buffer) >= update_interval
                     terminal = done or (step >= max_steps)
+                    
                     if (rollout_ready or terminal) and len(self.buffer) > 2:
                         h_t = self.net.get_states(clone=True, detach=True)
-                        loss_dict = self.update(
-                            last_next_state=next_state.to_tensor(),
-                            k_epochs=n_updates,
-                            h0=h0,
-                            max_grad_norm=max_grad_norm,
-                        )
+                        
+                        if burn_in > 0:
+                            burn_in -= 1
+                        
+                        else:
+                            loss_dict = self.update(
+                                last_next_state=next_state.to_tensor(),
+                                k_epochs=n_updates,
+                                h0=h0,
+                                max_grad_norm=max_grad_norm,
+                            )
+                            if store_results:
+                                episode_loss.append(loss_dict)
+
+                            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
+                            for key, val in loss_dict.items():
+                                msg += f" - {key}: {sum(val) / len(val):.5f}"
+                            print(msg, end="\r")
+
                         self.net.set_states(h0 := h_t, clone=True, detach=True)
                         self.buffer.clear()
-
-                        if store_results:
-                            episode_loss.append(loss_dict)
-
-                        msg = f"episode {episode} [{100*step/max_steps:.1f}%] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
-                        for key, val in loss_dict.items():
-                            msg += f" - {key}: {sum(val) / len(val):.5f}"
-                        print(msg, end="\r")
 
                     if terminal:
                         break
 
                 else:
-                    if step % update_interval == 0:
+                    if step % update_interval == 1:
                         print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
 
                 state = next_state
