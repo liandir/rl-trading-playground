@@ -1,133 +1,140 @@
 import torch
-import multiprocessing as mp
+from src.environment.discrete import MultiCurrencyEnv, State
 
 
-class DummyVecMultiCurrencyEnv:
-    def __init__(self, envs):
+class VecMultiCurrencyEnv:
+    """
+    Vectorised wrapper around N independent MultiCurrencyEnv instances.
+
+    Environments run sequentially in-process (no subprocesses). This is
+    appropriate because individual env steps are cheap Python operations and
+    IPC overhead would dominate with subprocess-based parallelism.
+
+    No auto-reset: when an environment reaches `done=True` the caller is
+    responsible for resetting it via `reset_at(i, data)`. This keeps reset
+    timing fully under trainer control (e.g. the trainer may want to choose a
+    new random start point before resetting).
+
+    Returns
+    -------
+    reset(datas)
+        obs    : (N, state_dim) tensor
+        states : list[State] of length N
+
+    step(actions, datas)
+        obs    : (N, state_dim) tensor
+        states : list[State] of length N
+        rewards: (N,) tensor
+        dones  : (N,) bool tensor
+
+    valid_action_mask()
+        mask   : (N, action_dim) bool tensor
+
+    reset_at(i, data)
+        obs    : (state_dim,) tensor
+        state  : State
+    """
+
+    def __init__(self, envs: list[MultiCurrencyEnv]):
+        assert len(envs) > 0, "envs must not be empty"
         self.envs = envs
-        self.n_envs = len(self.envs)
-        self.dtype = envs[0].dtype if hasattr(envs[0], "dtype") else torch.float32
+        self.n_envs = len(envs)
+        self.state_dim = envs[0].state_dim
+        self.action_dim = envs[0].action_dim
+        self.dtype = envs[0].dtype
 
-    def reset(self, datas):
-        # datas: list of length N, each a dict
-        states = [e.reset(d) for e, d in zip(self.envs, datas)]
-        obs = torch.stack([s.to_tensor() for s in states], dim=0)  # (N, state_dim)
+    def reset(self, datas: list[dict]) -> tuple[torch.Tensor, list[State]]:
+        """
+        Reset all environments.
+
+        datas: list of length n_envs, one market data dict per env.
+
+        Returns stacked obs (N, state_dim) and list of State objects.
+        """
+        states = [env.reset(d) for env, d in zip(self.envs, datas)]
+        obs = torch.stack([s.to_tensor() for s in states])
         return obs, states
 
-    def step(self, actions, datas):
-        # actions: torch.Tensor (N, act_dim) or list length N (or None per env)
-        # datas: list of dict length N
-        next_states, rewards, dones, infos = [], [], [], []
-        for i, (e, d) in enumerate(zip(self.envs, datas)):
-            a_i = None if actions is None else actions[i]
-            s2, r, done, info = e.step(a_i, d)
-            if done:
-                # auto reset (optional). You must supply a new reset snapshot.
-                # Here we just reset with current data d (you may want next snapshot).
-                s2 = e.reset(d)
+    def reset_at(self, i: int, data: dict) -> tuple[torch.Tensor, State]:
+        """
+        Reset a single environment by index.
 
-            next_states.append(s2)
+        Returns the obs tensor (state_dim,) and State for that environment.
+        """
+        state = self.envs[i].reset(data)
+        return state.to_tensor(), state
+
+    def step(
+        self,
+        actions: torch.Tensor | list | None,
+        datas: list[dict],
+    ) -> tuple[torch.Tensor, list[State], torch.Tensor, torch.Tensor]:
+        """
+        Step all environments.
+
+        actions: (N,) integer tensor, list of length N, or None (hold all).
+        datas  : list of length n_envs, one market data dict per env.
+
+        Returns:
+            obs    : (N, state_dim)
+            states : list[State] of length N
+            rewards: (N,) float tensor
+            dones  : (N,) bool tensor
+        """
+        next_states = []
+        rewards = []
+        dones = []
+
+        for i, (env, d) in enumerate(zip(self.envs, datas)):
+            a_i = None if actions is None else actions[i]
+            state, r, done, _ = env.step(a_i, d)
+            next_states.append(state)
+            rewards.append(r)
+            dones.append(done)
+
+        obs = torch.stack([s.to_tensor() for s in next_states])
+        return (
+            obs,
+            next_states,
+            torch.tensor(rewards, dtype=self.dtype),
+            torch.tensor(dones, dtype=torch.bool),
+        )
+
+    def step_with_info(
+        self,
+        actions: torch.Tensor | list | None,
+        datas: list[dict],
+    ) -> tuple[torch.Tensor, list[State], torch.Tensor, torch.Tensor, list[dict]]:
+        """
+        Same as step() but also returns the list of info dicts.
+        Use for evaluation/logging; skip during training to avoid the dict overhead.
+        """
+        next_states = []
+        rewards = []
+        dones = []
+        infos = []
+
+        for i, (env, d) in enumerate(zip(self.envs, datas)):
+            a_i = None if actions is None else actions[i]
+            state, r, done, info = env.step(a_i, d)
+            next_states.append(state)
             rewards.append(r)
             dones.append(done)
             infos.append(info)
 
-        obs = torch.stack([s.to_tensor() for s in next_states], dim=0)  # (N, state_dim)
+        obs = torch.stack([s.to_tensor() for s in next_states])
         return (
             obs,
-            torch.tensor(rewards, dtype=torch.float32),
-            torch.tensor(dones, dtype=torch.float32),
-            infos
+            next_states,
+            torch.tensor(rewards, dtype=self.dtype),
+            torch.tensor(dones, dtype=torch.bool),
+            infos,
         )
 
-
-def _worker(remote, parent_remote, env_fn_wrapper):
-    """Worker loop that listens for commands from the main process."""
-    parent_remote.close()
-    env = env_fn_wrapper.var()
-    try:
-        while True:
-            cmd, data = remote.recv()
-            if cmd == 'step':
-                action, step_data = data
-                s2, r, done, info = env.step(action, step_data)
-                if done:
-                    # Auto-reset logic as per your Dummy version
-                    s2 = env.reset(step_data)
-                remote.send((s2, r, done, info))
-            elif cmd == 'reset':
-                s2 = env.reset(data)
-                remote.send(s2)
-            elif cmd == 'close':
-                remote.close()
-                break
-            else:
-                raise NotImplementedError
-    except KeyboardInterrupt:
-        pass
-
-class CloudpickleWrapper:
-    """Uses cloudpickle to serialize arbitrary functions (like env creators)."""
-    def __init__(self, var):
-        self.var = var
-    def __getstate__(self):
-        import cloudpickle
-        return cloudpickle.dumps(self.var)
-    def __setstate__(self, obs):
-        import cloudpickle
-        self.var = cloudpickle.loads(obs)
-
-class SubprocVecMultiCurrencyEnv:
-    def __init__(self, env_fns):
+    def valid_action_mask(self) -> torch.Tensor:
         """
-        env_fns: list of callable functions that create an environment.
+        Returns a (N, action_dim) bool tensor.
+        True = action is valid for that environment given its current state.
         """
-        self.waiting = False
-        self.closed = False
-        self.n_envs = len(env_fns)
-        
-        # Create pipes
-        self.remotes, self.work_remotes = zip(*[mp.Pipe() for _ in range(self.n_envs)])
-        
-        # Start processes
-        self.ps = []
-        for (wrk, rem, env_fn) in zip(self.work_remotes, self.remotes, env_fns):
-            p = mp.Process(target=_worker, args=(wrk, rem, CloudpickleWrapper(env_fn)))
-            p.daemon = True 
-            p.start()
-            self.ps.append(p)
-            wrk.close()
-
-    def reset(self, datas):
-        # Send reset command to all workers
-        for remote, data in zip(self.remotes, datas):
-            remote.send(('reset', data))
-        
-        states = [remote.recv() for remote in self.remotes]
-        obs = torch.stack([s.to_tensor() for s in states], dim=0)
-        return obs, states
-
-    def step(self, actions, datas):
-        # Send step command to all workers
-        for i, (remote, data) in enumerate(zip(self.remotes, datas)):
-            a_i = None if actions is None else actions[i]
-            remote.send(('step', (a_i, data)))
-        
-        # Collect results
-        results = [remote.recv() for remote in self.remotes]
-        next_states, rewards, dones, infos = zip(*results)
-
-        obs = torch.stack([s.to_tensor() for s in next_states], dim=0)
-        return (
-            obs,
-            torch.tensor(rewards, dtype=torch.float32),
-            torch.tensor(dones, dtype=torch.float32),
-            list(infos)
-        )
-
-    def close(self):
-        if self.closed: return
-        for remote in self.remotes:
-            remote.send(('close', None))
-        for p in self.ps:
-            p.join()
-        self.closed = True
+        masks = [env.valid_action_mask() for env in self.envs]
+        return torch.stack(masks)

@@ -1,3 +1,4 @@
+import copy
 import torch
 from torch import distributions
 
@@ -13,6 +14,13 @@ def _expected_q(logits: torch.Tensor, q_values: torch.Tensor) -> torch.Tensor:
 def _selected_q(q_values: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
     actions_long = actions.long()
     return q_values.gather(-1, actions_long.unsqueeze(-1)).squeeze(-1)
+
+
+def _masked_logits(logits: torch.Tensor, mask: torch.Tensor | None) -> torch.Tensor:
+    """Set logits for invalid actions to -inf. mask[i]=True means action i is valid."""
+    if mask is None:
+        return logits
+    return logits.masked_fill(~mask.to(device=logits.device), float("-inf"))
 
 
 UPDATE_METRIC_NAMES = (
@@ -202,8 +210,14 @@ class RecurrentActionQNetwork(torch.nn.Module):
     def forward(self, x):
         z = x.view(-1, self.state_dim)
         for layer in self.layers:
-            z = self.activation(layer(z))
+            z = layer(z)
         return self.actor(z), self.q_head(z)
+    
+    def forward_seq(self, x_seq):
+        z_seq = x_seq
+        for layer in self.layers:
+            z_seq = layer.forward_seq(z_seq)
+        return self.actor.forward_seq(z_seq), self.q_head.forward_seq(z_seq)
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
         trunk = [cell.get_state(clone=clone, detach=detach) for cell in self.layers]
@@ -282,12 +296,8 @@ class VAQAgent:
         action_dim: int,
         # basic properties
         gamma: float = 0.999,
-        k_epochs: int = 4,
         vf_coef: float = 0.5,
         ent_coef: float = 0.01,
-        max_grad_norm: float | None = None,
-        # advantages and returns
-        normalize_returns: bool = False,
         normalize_advantages: bool = True,
         # network properties
         hidden_dims: tuple[int] = [256, 256],
@@ -298,11 +308,8 @@ class VAQAgent:
         device: str = "cpu",
     ):
         self.gamma = gamma
-        self.k_epochs = k_epochs
         self.vf_coef = vf_coef
         self.ent_coef = ent_coef
-        self.max_grad_norm = max_grad_norm
-        self.normalize_returns = normalize_returns
         self.normalize_advantages = normalize_advantages
         self.dtype = dtype
         self.device = torch.device(device)
@@ -319,22 +326,43 @@ class VAQAgent:
             activation=activation,
         ).to(device=self.device, dtype=self.dtype)
 
+        self.net_t = copy.deepcopy(self.net)
+        self.net_t.requires_grad_(False)
+
         self.buffer = RolloutBuffer()
 
-    def infer_dist_from_seq(self, state: torch.Tensor) -> tuple[distributions.Categorical, torch.Tensor]:
-        logits, q_values = self.net(state)
-        return distributions.Categorical(logits=logits), q_values
+    def infer_logits(self, state: torch.Tensor) -> torch.Tensor:
+        logits, _ = self.net(state)
+        return logits
 
-    def act(self, state: torch.Tensor, explore: bool = False, grad_enabled: bool = False) -> torch.Tensor:
+    def infer_logits_from_seq(self, state: torch.Tensor) -> torch.Tensor:
+        logits, _ = self.net(state)
+        return logits
+
+    def infer_dist_from_seq(
+        self,
+        state: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> tuple[distributions.Categorical, torch.Tensor]:
+        logits, q_values = self.net(state)
+        return distributions.Categorical(logits=_masked_logits(logits, mask)), q_values
+
+    def act(
+        self,
+        state: torch.Tensor,
+        explore: bool = False,
+        grad_enabled: bool = False,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Sample or greedily select a discrete action and return only the action tensor."""
         with torch.set_grad_enabled(grad_enabled):
             state = state.to(dtype=self.dtype, device=self.device)
-
-            dist, _ = self.infer_dist_from_seq(state)
+            logits = self.infer_logits(state)
+            logits = _masked_logits(logits, mask)
             if explore:
-                action = dist.sample().squeeze()
+                action = distributions.Categorical(logits=logits).sample().squeeze()
             else:
-                action = torch.argmax(dist.logits, dim=-1).squeeze()
+                action = logits.argmax(dim=-1).squeeze()
 
         if grad_enabled:
             return action
@@ -347,12 +375,19 @@ class VAQAgent:
         opt_cls = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
+    def update_net_t(self, tau: float = 0.005):
+        """Polyak-average net_t toward net: θ_t ← (1-τ)θ_t + τθ."""
+        with torch.no_grad():
+            for p, p_t in zip(self.net.parameters(), self.net_t.parameters()):
+                p_t.lerp_(p, tau)
+
     def update(
         self,
         last_next_state: torch.Tensor,
-        last_done: bool | torch.Tensor | None = None,
         k_epochs: int = 1,
         max_grad_norm: float | None = None,
+        mask: torch.Tensor | None = None,
+        target_tau: float = 0.005,
     ) -> dict[str, list[float]]:
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
@@ -364,11 +399,11 @@ class VAQAgent:
 
         advantages, raw_advantages, targets, states, actions = self.compute_td0_advantages(
             last_next_state=last_next_state,
-            last_done=last_done,
+            mask=mask,
         )
 
         for _ in range(k_epochs):
-            dist, q_values_pred = self.infer_dist_from_seq(states)
+            dist, q_values_pred = self.infer_dist_from_seq(states, mask=mask)
             actions_long = actions.long()
 
             log_probs = dist.log_prob(actions_long)
@@ -405,12 +440,13 @@ class VAQAgent:
                 loss=loss,
             )
 
+        self.update_net_t(target_tau)
         return metrics
 
     def compute_td0_advantages(
         self,
         last_next_state: torch.Tensor,
-        last_done: bool | torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         states, actions, rewards, dones = self.buffer.to_tensors(self.device, self.dtype)
 
@@ -420,7 +456,8 @@ class VAQAgent:
 
         with torch.no_grad():
             last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
-            logits, q_values = self.net(torch.concat([states, last_next_state[None]], dim=0))
+            logits, q_values = self.net_t(torch.concat([states, last_next_state[None]], dim=0))
+            logits = _masked_logits(logits, mask)
 
             logits_t = logits[:-1]
             logits_tp1 = logits[1:]
@@ -437,8 +474,6 @@ class VAQAgent:
 
             if self.normalize_advantages:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
-            if self.normalize_returns:
-                targets = (targets - targets.mean()) / (targets.std() + 1e-7)
 
         return advantages, raw_advantages, targets, states, actions
 
@@ -456,14 +491,16 @@ class VAQAgent:
         env,
         data,
         n_episodes,
-        update_interval=100,
-        n_updates=1,
         max_steps=2000,
         warm_up=0,
+        update_interval=100,
+        n_updates=1,
         lr=3e-4,
+        target_tau=0.005,
         optim="AdamW",
-        init_optimizer=True,
+        init_optimizer=False,
         store_results=True,
+        max_grad_norm=None,
     ):
         """Train on contiguous historical rollouts and collect episode-level metric histories."""
         if not hasattr(self, "optim") or init_optimizer:
@@ -487,9 +524,11 @@ class VAQAgent:
             step = 1
             while True:
                 if step > warm_up:
-                    action = self.act(state.to_tensor(), explore=True, grad_enabled=False)
+                    mask = env.valid_action_mask() if hasattr(env, "valid_action_mask") else None
+                    action = self.act(state.to_tensor(), explore=True, grad_enabled=False, mask=mask)
                 else:
                     action = None
+                    mask = None
 
                 next_state, reward, done, info = env.step(action, data[start + step])
 
@@ -510,9 +549,9 @@ class VAQAgent:
                     if (rollout_ready or terminal) and len(self.buffer) > 2:
                         loss_dict = self.update(
                             last_next_state=next_state.to_tensor(),
-                            last_done=done,
                             k_epochs=n_updates,
-                            max_grad_norm=self.max_grad_norm,
+                            max_grad_norm=max_grad_norm,
+                            target_tau=target_tau,
                         )
                         self.buffer.clear()
 
@@ -528,7 +567,7 @@ class VAQAgent:
                         break
 
                 else:
-                    if step % update_interval == 0:
+                    if step % update_interval == 1:
                         print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
 
                 state = next_state
@@ -544,6 +583,134 @@ class VAQAgent:
                 keys = episode_loss[0].keys()
                 for key in keys:
                     msg += f" - {key}: {sum(sum(ld[key]) / len(ld[key]) for ld in episode_loss) / len(episode_loss):.5f}"
+            print(msg)
+
+        return total_loss, total_reward, total_info
+
+    def train_on_historical_vec(
+        self,
+        vec_env,
+        data,
+        n_episodes,
+        max_steps=2000,
+        warm_up=0,
+        update_interval=100,
+        n_updates=1,
+        lr=3e-4,
+        target_tau=0.005,
+        optim="AdamW",
+        init_optimizer=False,
+        store_results=True,
+        max_grad_norm=None,
+    ):
+        """
+        Train on N parallel historical rollouts using VecMultiCurrencyEnv.
+
+        At each step all N environments contribute one transition, so the buffer
+        stores (N, ...) tensors per time-step.  A single update() call processes
+        the whole (T, N, ...) batch, giving a gradient estimate that averages
+        over both time and environments.  The episode ends as soon as any
+        environment reaches done or max_steps is hit.
+
+        Returns (total_loss, total_reward, total_info) where:
+          total_loss[ep]   : list of loss_dicts, one per rollout update
+          total_reward[ep] : list[list[float]], one inner list per env
+          total_info[ep]   : list[list[dict]],  one inner list per env
+        """
+        if not hasattr(self, "optim") or init_optimizer:
+            self.init_optimizer(lr, optim=optim)
+
+        N = vec_env.n_envs
+        dtype = vec_env.dtype
+        data_len = len(data)
+
+        total_reward = []
+        total_loss = []
+        total_info = []
+
+        for episode in range(1, n_episodes + 1):
+            starts = [torch.randint(data_len - max_steps, size=[1]).item() for _ in range(N)]
+            obs, _ = vec_env.reset([data[starts[i]] for i in range(N)])
+            self.buffer.clear()
+
+            if store_results:
+                ep_reward = [[] for _ in range(N)]
+                ep_loss = []
+                ep_info = [[] for _ in range(N)]
+
+            step = 1
+            while step <= max_steps:
+                if step > warm_up:
+                    masks = vec_env.valid_action_mask() if hasattr(vec_env, "valid_action_mask") else None
+                    actions = self.act(obs, explore=True, grad_enabled=False, mask=masks)
+                else:
+                    actions = None
+
+                if store_results:
+                    next_obs, _, rewards, dones, infos = vec_env.step_with_info(
+                        actions, [data[starts[i] + step] for i in range(N)]
+                    )
+                    for i in range(N):
+                        ep_reward[i].append(float(rewards[i]))
+                        ep_info[i].append(infos[i])
+                else:
+                    next_obs, _, rewards, dones = vec_env.step(
+                        actions, [data[starts[i] + step] for i in range(N)]
+                    )
+
+                terminal = bool(dones.any()) or step >= max_steps
+
+                if step > warm_up:
+                    self.buffer.store(
+                        obs.detach(),
+                        actions.detach(),
+                        rewards.to(dtype=dtype),
+                        dones.to(dtype=dtype),
+                    )
+
+                    rollout_ready = len(self.buffer) >= update_interval
+
+                    if (rollout_ready or terminal) and len(self.buffer) > 2:
+                        loss_dict = self.update(
+                            last_next_state=next_obs,
+                            k_epochs=n_updates,
+                            max_grad_norm=max_grad_norm,
+                            target_tau=target_tau,
+                        )
+                        self.buffer.clear()
+
+                        if store_results:
+                            ep_loss.append(loss_dict)
+
+                        msg = f"episode {episode} [{100*step/max_steps:.1f}%] - mean reward: {rewards.mean():.5f}"
+                        if store_results:
+                            msg += f" - portfolio: {sum(d['V'] for d in infos) / N:.2f}"
+                        for key, val in loss_dict.items():
+                            msg += f" - {key}: {sum(val) / len(val):.5f}"
+                        print(msg, end="\r")
+
+                    if terminal:
+                        break
+                else:
+                    if terminal:
+                        break
+                    if step % update_interval == 1:
+                        print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
+
+                obs = next_obs
+                step += 1
+
+            if store_results:
+                total_loss.append(ep_loss)
+                total_reward.append(ep_reward)
+                total_info.append(ep_info)
+
+            all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
+            msg = f"episode {episode} - total reward: {sum(all_ep_rewards):.5f} ({N} envs)"
+            if store_results and len(ep_loss) > 0:
+                keys = ep_loss[0].keys()
+                for key in keys:
+                    msg += f" - {key}: {sum(sum(ld[key]) / len(ld[key]) for ld in ep_loss) / len(ep_loss):.5f}"
             print(msg)
 
         return total_loss, total_reward, total_info
@@ -609,37 +776,72 @@ class RecurrentVAQAgent:
             recurrent_kwargs=recurrent_kwargs,
         ).to(device=self.device, dtype=self.dtype)
 
+        self.net_t = copy.deepcopy(self.net)
+        self.net_t.requires_grad_(False)
+
         self.buffer = RolloutBuffer()
         self.net.reset(1)
+        self.net_t.reset(1)
 
-    def infer_dist(self, state: torch.Tensor) -> distributions.Categorical:
+    def infer_logits(self, state: torch.Tensor) -> torch.Tensor:
         logits, _ = self.net(state)
-        return distributions.Categorical(logits=logits)
+        return logits
 
-    def infer_dist_from_seq(self, state_seq: torch.Tensor, h0: dict | None = None) -> tuple[distributions.Categorical, torch.Tensor]:
+    def infer_logits_from_seq(
+        self,
+        state_seq: torch.Tensor,
+        h0: dict | None = None,
+    ) -> torch.Tensor:
+        if h0 is not None:
+            self.net.set_states(h0, strict=False)
+        logits_seq, _ = self.net.forward_seq(state_seq)
+        return logits_seq
+
+    def infer_dist(
+        self,
+        state: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> distributions.Categorical:
+        return distributions.Categorical(logits=_masked_logits(self.infer_logits(state), mask))
+
+    def infer_dist_from_seq(
+        self,
+        state_seq: torch.Tensor,
+        h0: dict | None = None,
+        mask: torch.Tensor | None = None,
+    ) -> tuple[distributions.Categorical, torch.Tensor]:
+        """
+        Full-sequence inference using the CuDNN-accelerated forward_seq path.
+
+        state_seq: (T, state_dim)
+
+        Returns:
+          dist  : Categorical over (T, action_dim) masked logits
+          q_seq : (T, action_dim) Q-values
+        """
         if h0 is not None:
             self.net.set_states(h0, strict=False)
 
-        logits_seq, q_seq = [], []
-        for state in state_seq:
-            logits, q_values = self.net(state)
-            logits_seq.append(logits.squeeze())
-            q_seq.append(q_values.squeeze())
-        logits_seq = torch.stack(logits_seq, dim=0)
-        q_seq = torch.stack(q_seq, dim=0)
+        logits_seq, q_seq = self.net.forward_seq(state_seq)   # (T, A), (T, A)
 
-        return distributions.Categorical(logits=logits_seq), q_seq
+        return distributions.Categorical(logits=_masked_logits(logits_seq, mask)), q_seq
 
-    def act(self, state: torch.Tensor, explore: bool = False, grad_enabled: bool = False) -> torch.Tensor:
+    def act(
+        self,
+        state: torch.Tensor,
+        explore: bool = False,
+        grad_enabled: bool = False,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Sample or greedily select a discrete action and return only the action tensor."""
         with torch.set_grad_enabled(grad_enabled):
             state = state.to(dtype=self.dtype, device=self.device)
-
-            dist = self.infer_dist(state)
+            logits = self.infer_logits(state)
+            logits = _masked_logits(logits, mask)
             if explore:
-                action = dist.sample().squeeze()
+                action = distributions.Categorical(logits=logits).sample().squeeze()
             else:
-                action = torch.argmax(dist.logits, dim=-1).squeeze()
+                action = logits.argmax(dim=-1).squeeze()
 
         if grad_enabled:
             return action
@@ -652,12 +854,20 @@ class RecurrentVAQAgent:
         opt_cls = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
+    def update_net_t(self, tau: float = 0.005):
+        """Polyak-average net_t toward net: θ_t ← (1-τ)θ_t + τθ."""
+        with torch.no_grad():
+            for p, p_t in zip(self.net.parameters(), self.net_t.parameters()):
+                p_t.lerp_(p, tau)
+
     def update(
         self,
         last_next_state: torch.Tensor,
         k_epochs: int = 1,
         h0: dict | None = None,
         max_grad_norm: float | None = None,
+        mask: torch.Tensor | None = None,
+        target_tau: float = 0.005,
     ) -> dict[str, list[float]]:
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
@@ -670,10 +880,11 @@ class RecurrentVAQAgent:
         advantages, raw_advantages, targets, states, actions = self.compute_td0_advantages(
             last_next_state=last_next_state,
             h0=h0,
+            mask=mask,
         )
 
         for _ in range(k_epochs):
-            dists, q_values_pred = self.infer_dist_from_seq(states, h0=h0)
+            dists, q_values_pred = self.infer_dist_from_seq(states, h0=h0, mask=mask)
             actions_long = actions.long()
 
             log_probs = dists.log_prob(actions_long)
@@ -710,12 +921,14 @@ class RecurrentVAQAgent:
                 loss=loss,
             )
 
+        self.update_net_t(target_tau)
         return metrics
 
     def compute_td0_advantages(
         self,
         last_next_state: torch.Tensor,
         h0: dict | None = None,
+        mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         states, actions, rewards, dones = self.buffer.to_tensors(self.device, self.dtype)
         actions = actions.squeeze(-1) if actions.dim() > 1 else actions
@@ -725,13 +938,15 @@ class RecurrentVAQAgent:
         last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
 
         with torch.no_grad():
-            dists, q_values = self.infer_dist_from_seq(
-                torch.concat([states, last_next_state[None]], dim=0),
-                h0=h0,
+            if h0 is not None:
+                self.net_t.set_states(h0, strict=False)
+            logits_seq, q_values = self.net_t.forward_seq(
+                torch.concat([states, last_next_state[None]], dim=0)
             )
+            logits_seq = _masked_logits(logits_seq, mask)
 
-            logits_t = dists.logits[:-1]
-            logits_tp1 = dists.logits[1:]
+            logits_t = logits_seq[:-1]
+            logits_tp1 = logits_seq[1:]
             q_t = q_values[:-1]
             q_tp1 = q_values[1:]
 
@@ -759,6 +974,7 @@ class RecurrentVAQAgent:
         n_updates=1,
         burn_in_updates=0,
         lr=3e-4,
+        target_tau=0.005,
         optim="AdamW",
         init_optimizer=False,
         store_results=True,
@@ -793,9 +1009,11 @@ class RecurrentVAQAgent:
             step = 1
             while True:
                 if step > warm_up:
-                    action = self.act(state.to_tensor(), explore=True, grad_enabled=False)
+                    mask = env.valid_action_mask() if hasattr(env, "valid_action_mask") else None
+                    action = self.act(state.to_tensor(), explore=True, grad_enabled=False, mask=mask)
                 else:
                     action = None
+                    mask = None
 
                 next_state, reward, done, info = env.step(action, data[start + step])
 
@@ -813,19 +1031,20 @@ class RecurrentVAQAgent:
 
                     rollout_ready = len(self.buffer) >= update_interval
                     terminal = done or (step >= max_steps)
-                    
+
                     if (rollout_ready or terminal) and len(self.buffer) > 2:
                         h_t = self.net.get_states(clone=True, detach=True)
-                        
+
                         if burn_in > 0:
                             burn_in -= 1
-                        
+
                         else:
                             loss_dict = self.update(
                                 last_next_state=next_state.to_tensor(),
                                 k_epochs=n_updates,
                                 h0=h0,
                                 max_grad_norm=max_grad_norm,
+                                target_tau=target_tau
                             )
                             if store_results:
                                 episode_loss.append(loss_dict)
@@ -862,6 +1081,151 @@ class RecurrentVAQAgent:
 
         return total_loss, total_reward, total_info
 
+    def train_on_historical_vec(
+        self,
+        vec_env,
+        data,
+        n_episodes,
+        max_steps=2000,
+        warm_up=0,
+        update_interval=100,
+        n_updates=1,
+        burn_in_updates=0,
+        lr=3e-4,
+        target_tau=0.005,
+        optim="AdamW",
+        init_optimizer=False,
+        store_results=True,
+        max_grad_norm=None,
+    ):
+        """
+        Train on N parallel historical rollouts using VecMultiCurrencyEnv.
+
+        At each step all N environments contribute one transition, so the buffer
+        stores (N, ...) tensors per time-step.  forward_seq then processes the
+        full (T, N, ...) batch via the fused RNN kernel in one call, and a single
+        update() averages the gradient estimate over both time and environments.
+        The episode ends as soon as any environment reaches done or max_steps.
+
+        `burn_in_updates` skips the first N gradient updates after warm-up so
+        the shared hidden state can move away from the zero-initialised state.
+
+        Returns (total_loss, total_reward, total_info) where:
+          total_loss[ep]   : list of loss_dicts, one per rollout update
+          total_reward[ep] : list[list[float]], one inner list per env
+          total_info[ep]   : list[list[dict]],  one inner list per env
+        """
+        if not hasattr(self, "optim") or init_optimizer:
+            self.init_optimizer(lr, optim=optim)
+
+        N = vec_env.n_envs
+        dtype = vec_env.dtype
+        data_len = len(data)
+
+        total_reward = []
+        total_loss = []
+        total_info = []
+
+        for episode in range(1, n_episodes + 1):
+            self.net.reset(N)
+            h0 = self.net.get_states(clone=True, detach=True)
+            burn_in = burn_in_updates
+
+            starts = [torch.randint(data_len - max_steps, size=[1]).item() for _ in range(N)]
+            obs, _ = vec_env.reset([data[starts[i]] for i in range(N)])
+            self.buffer.clear()
+
+            if store_results:
+                ep_reward = [[] for _ in range(N)]
+                ep_loss = []
+                ep_info = [[] for _ in range(N)]
+
+            step = 1
+            while step <= max_steps:
+                if step > warm_up:
+                    masks = vec_env.valid_action_mask() if hasattr(vec_env, "valid_action_mask") else None
+                    actions = self.act(obs, explore=True, grad_enabled=False, mask=masks)
+                else:
+                    actions = None
+
+                if store_results:
+                    next_obs, _, rewards, dones, infos = vec_env.step_with_info(
+                        actions, [data[starts[i] + step] for i in range(N)]
+                    )
+                    for i in range(N):
+                        ep_reward[i].append(float(rewards[i]))
+                        ep_info[i].append(infos[i])
+                else:
+                    next_obs, _, rewards, dones = vec_env.step(
+                        actions, [data[starts[i] + step] for i in range(N)]
+                    )
+
+                terminal = bool(dones.any()) or step >= max_steps
+
+                if step > warm_up:
+                    self.buffer.store(
+                        obs.detach(),
+                        actions.detach(),
+                        rewards.to(dtype=dtype),
+                        dones.to(dtype=dtype),
+                    )
+
+                    rollout_ready = len(self.buffer) >= update_interval
+
+                    if (rollout_ready or terminal) and len(self.buffer) > 2:
+                        h_t = self.net.get_states(clone=True, detach=True)
+
+                        if burn_in > 0:
+                            burn_in -= 1
+                        else:
+                            loss_dict = self.update(
+                                last_next_state=next_obs,
+                                k_epochs=n_updates,
+                                h0=h0,
+                                max_grad_norm=max_grad_norm,
+                                target_tau=target_tau
+                            )
+                            if store_results:
+                                ep_loss.append(loss_dict)
+
+                            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - mean reward: {rewards.mean():.5f}"
+                            if store_results:
+                                msg += f" - mean portfolio: {sum(infos[i]['V'] for i in range(N)) / N:.2f}"
+                            for key, val in loss_dict.items():
+                                msg += f" - {key}: {sum(val) / len(val):.5f}"
+                            print(msg, end="\r")
+
+                        # Restore the live hidden state (update's forward_seq rewrites it)
+                        self.net.set_states(h_t, clone=True, detach=True)
+                        h0 = self.net.get_states(clone=True, detach=True)
+                        self.buffer.clear()
+
+                    if terminal:
+                        break
+                else:
+                    if terminal:
+                        break
+                    if step % update_interval == 1:
+                        print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
+
+                obs = next_obs
+                step += 1
+
+            if store_results:
+                total_loss.append(ep_loss)
+                total_reward.append(ep_reward)
+                total_info.append(ep_info)
+
+            all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
+            msg = f"episode {episode} - total reward: {sum(all_ep_rewards):.5f} ({N} envs)"
+            if store_results and len(ep_loss) > 0:
+                keys = ep_loss[0].keys()
+                for key in keys:
+                    msg += f" - {key}: {sum(sum(ld[key]) / len(ld[key]) for ld in ep_loss) / len(ep_loss):.5f}"
+            print(msg)
+
+        return total_loss, total_reward, total_info
+
     def save(self, path: str):
         torch.save({
             "network": self.net.state_dict(),
@@ -870,3 +1234,4 @@ class RecurrentVAQAgent:
     def load(self, path: str, strict: bool = True):
         ckpt = torch.load(path, map_location=self.device)
         self.net.load_state_dict(ckpt["network"], strict=strict)
+
