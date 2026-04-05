@@ -7,7 +7,9 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "websockets>=12,<16",
+]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
