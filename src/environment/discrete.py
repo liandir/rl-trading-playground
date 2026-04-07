@@ -630,3 +630,400 @@ class MultiCurrencyEnv:
             self.history.append(next_state)
 
         return next_state, reward, done, info
+
+
+class BatchedMultiCurrencyEnv:
+    """
+    Fully-batched B-environment version of MultiCurrencyEnv.
+
+    All portfolio state is stored as (B, ...) tensors so a single step() call
+    advances all B environments in parallel using vectorised PyTorch operations
+    — no Python loops over environments.
+
+    Market data is passed as (B, N) tensors per call so each environment can
+    independently track a different segment of history (different start offsets).
+
+    Action space and parameters are identical to MultiCurrencyEnv.
+
+    API
+    ---
+    reset(close, high, low, volume, time)               -> obs (B, state_dim)
+    step(actions, close, high, low, volume, time)       -> obs, rewards, dones
+    valid_action_mask()                                 -> (B, action_dim) bool
+    """
+
+    def __init__(
+        self,
+        B: int,
+        N: int,
+        C0: float,
+        tau_p: torch.Tensor,
+        *,
+        bankruptcy_threshold: float = 1.0,
+        transaction_eps: float = 1e-2,
+        use_dollar_volume: bool = True,
+        sell_fee: float = 1.0,
+        buy_fee: float = 1.0,
+        tax_rate: float = 0.26,
+        min_buy_dollars: float = 10.0,
+        tau_p_live: Optional[float] = None,
+        val_coeff: float = 0.1,
+        roi_coeff: float = 1.0,
+        reward_mode: str = "log",
+        size_buckets: Tuple[float, ...] = (0.50, 1.00),
+        done_reward_penalty: float = 10.0,
+        dtype: torch.dtype = torch.float32,
+        eps: float = 1e-8,
+    ):
+        assert isinstance(B, int) and B > 0
+        assert isinstance(N, int) and N > 0
+        assert tau_p.ndim == 1 and tau_p.numel() > 0
+        assert min_buy_dollars >= buy_fee
+        assert len(size_buckets) > 0
+        assert all(0.0 < x <= 1.0 for x in size_buckets)
+        assert reward_mode in ("return", "log")
+        if tau_p_live is not None:
+            assert tau_p_live > 0.0
+            assert bool(torch.all(tau_p_live < tau_p).item())
+
+        self.B = B
+        self.N = N
+        self.dtype = dtype
+        self.eps = float(eps)
+        self.C0 = float(C0)
+        self.bankruptcy_threshold = float(bankruptcy_threshold)
+        self.transaction_eps = float(transaction_eps)
+        self.use_dollar_volume = bool(use_dollar_volume)
+        self.tax_rate = float(tax_rate)
+        self.min_buy_dollars = float(min_buy_dollars)
+        self.tau_p_live = float(tau_p_live) if tau_p_live is not None else None
+        self.val_coeff = float(val_coeff)
+        self.roi_coeff = float(roi_coeff)
+        self.reward_mode = reward_mode
+        self.done_reward_penalty = float(done_reward_penalty)
+        self.s_fee = float(sell_fee)
+        self.b_fee = float(buy_fee)
+
+        self.tau_p = tau_p.to(dtype)        # (M,)
+        self.M = self.tau_p.numel()
+
+        self.size_buckets = torch.tensor(size_buckets, dtype=dtype)  # (K,)
+        self.K = int(self.size_buckets.numel())
+
+        # state = time(6) + p_rel(M*N) + hl_rel(N) + x_rel(N+1) + c_rel(N) + rho(1) + v_rel(M*N) + unrl_rel(N) + vol_rel(M*N)
+        self.state_dim = 3 * self.M * N + 4 * N + 8
+        self.action_dim = 1 + 2 * N * self.K
+
+        self._b_idx = torch.arange(B)   # (B,) — reused in _trade for fancy indexing
+
+        # runtime state — initialised in reset()
+        self.C = None           # (B,)
+        self.w = None           # (B, N)
+        self.invested = None    # (B, N)
+        self.p = None           # (B, N)
+        self.v = None           # (B, N)
+        self.p_smooth = None    # (B, M, N)
+        self.v_smooth = None    # (B, M, N)
+        self.hl_rel = None      # (B, N)
+        self.hl_smooth = None   # (B, M, N)
+        self.p_rel = None       # (B, M, N)
+        self.v_rel = None       # (B, M, N)
+        self.vol_rel = None     # (B, M, N)
+        self.V_prev = None      # (B,)
+        self.realized_cost = None   # (B, N)
+        self.realized_pnl = None    # (B, N)
+        self.t = None           # (B,) float timestamps
+
+    # -------------------------------------------------------------------------
+    # action helpers
+    # -------------------------------------------------------------------------
+
+    def encode_hold(self) -> int:
+        return 0
+
+    def encode_buy(self, asset_idx: int, bucket_idx: int) -> int:
+        return 1 + asset_idx * self.K + bucket_idx
+
+    def encode_sell(self, asset_idx: int, bucket_idx: int) -> int:
+        return 1 + self.N * self.K + asset_idx * self.K + bucket_idx
+
+    # -------------------------------------------------------------------------
+    # portfolio property
+    # -------------------------------------------------------------------------
+
+    @property
+    def V(self) -> torch.Tensor:    # (B,)
+        return self.C + (self.w * self.p).sum(dim=-1)
+
+    # -------------------------------------------------------------------------
+    # reset
+    # -------------------------------------------------------------------------
+
+    def reset(
+        self,
+        close: torch.Tensor,    # (B, N)
+        high: torch.Tensor,     # (B, N)
+        low: torch.Tensor,      # (B, N)
+        volume: torch.Tensor,   # (B, N)
+        time: torch.Tensor,     # (B,) float timestamps
+        C0: Optional[float] = None,
+    ) -> torch.Tensor:
+        if C0 is not None:
+            self.C0 = float(C0)
+
+        B, N, M = self.B, self.N, self.M
+
+        close  = close.to(self.dtype)
+        high   = high.to(self.dtype)
+        low    = low.to(self.dtype)
+        volume = volume.to(self.dtype)
+        self.t = time.to(torch.float64) if isinstance(time, torch.Tensor) else torch.tensor(time, dtype=torch.float64)
+
+        self.C        = torch.full((B,), self.C0, dtype=self.dtype)
+        self.w        = torch.zeros(B, N, dtype=self.dtype)
+        self.invested = torch.zeros(B, N, dtype=self.dtype)
+        self.p        = close.clone()
+        self.v        = volume.clone()
+        if self.use_dollar_volume:
+            self.v = self.v * self.p
+
+        self.p_smooth  = self.p[:, None, :].expand(B, M, N).clone()   # (B, M, N)
+        self.v_smooth  = self.v[:, None, :].expand(B, M, N).clone()
+        self.hl_rel    = self._hl_rel(high, low)                        # (B, N)
+        self.hl_smooth = self.hl_rel[:, None, :].expand(B, M, N).clone()
+
+        self.p_rel  = torch.zeros(B, M, N, dtype=self.dtype)
+        self.v_rel  = torch.zeros(B, M, N, dtype=self.dtype)
+        self.vol_rel = torch.zeros(B, M, N, dtype=self.dtype)
+
+        self.V_prev       = self.C.clone()
+        self.realized_cost = torch.zeros(B, N, dtype=self.dtype)
+        self.realized_pnl  = torch.zeros(B, N, dtype=self.dtype)
+
+        return self._obs()
+
+    # -------------------------------------------------------------------------
+    # internal helpers
+    # -------------------------------------------------------------------------
+
+    def _hl_rel(self, high: torch.Tensor, low: torch.Tensor) -> torch.Tensor:
+        return 2.0 * (high - low) / (high + low + self.eps)    # (B, N)
+
+    def _time_features(self) -> torch.Tensor:
+        """Compute (B, 6) cyclic time features. Small Python loop over B is fine."""
+        features = []
+        for ts in self.t.tolist():
+            dt_obj = datetime.fromtimestamp(ts)
+            iso = dt_obj.isocalendar()
+            total_weeks = datetime(dt_obj.year, 12, 28).isocalendar().week
+            period_day  = (dt_obj.hour + (dt_obj.minute + dt_obj.microsecond / 1e6) / 60.0) / 24.0
+            period_week = (iso.weekday - 1 + period_day) / 7.0
+            period_year = (iso.week - 1 + period_week) / max(total_weeks, 1)
+            angles = torch.tensor([period_day, period_week, period_year], dtype=self.dtype)
+            features.append(torch.cat([torch.sin(2 * PI * angles), torch.cos(2 * PI * angles)]))
+        return torch.stack(features)    # (B, 6)
+
+    def _obs(self) -> torch.Tensor:
+        """Build and return the (B, state_dim) observation tensor."""
+        B, N = self.B, self.N
+        V = self.V.clamp(min=self.eps)  # (B,)
+
+        t_vec   = self._time_features()                             # (B, 6)
+        x_cash  = (self.C / V)[:, None]                             # (B, 1)
+        x_assets = (self.w * self.p) / V[:, None]                  # (B, N)
+        x_rel   = torch.cat([x_cash, x_assets], dim=1)             # (B, N+1)
+
+        S     = self.invested.sum(dim=1)                            # (B,)
+        c_rel = torch.where(
+            S[:, None] > 0,
+            self.invested / (S[:, None] + self.eps),
+            torch.zeros(B, N, dtype=self.dtype),
+        )                                                           # (B, N)
+        rho   = S / (S + self.C + self.eps)                         # (B,)
+
+        has       = self.invested > self.eps                        # (B, N)
+        avg_cost  = torch.where(has, self.invested / self.w.clamp(min=self.eps),
+                                torch.zeros(B, N, dtype=self.dtype))
+        unrl_pre  = torch.where(has, (self.p - avg_cost) * self.w,
+                                torch.zeros(B, N, dtype=self.dtype))
+        unrl_rel  = torch.where(
+            has,
+            (unrl_pre - unrl_pre.clamp(min=0.0) * self.tax_rate) / self.invested.clamp(min=self.eps),
+            torch.zeros(B, N, dtype=self.dtype),
+        )                                                           # (B, N)
+
+        return torch.cat([
+            t_vec,                          # (B, 6)
+            self.p_rel.view(B, -1),         # (B, M*N)
+            self.hl_rel,                    # (B, N)
+            x_rel,                          # (B, N+1)
+            c_rel,                          # (B, N)
+            rho[:, None],                   # (B, 1)
+            self.v_rel.view(B, -1),         # (B, M*N)
+            unrl_rel,                       # (B, N)
+            self.vol_rel.view(B, -1),       # (B, M*N)
+        ], dim=1)
+
+    def _update(
+        self,
+        close: torch.Tensor,    # (B, N)
+        high: torch.Tensor,     # (B, N)
+        low: torch.Tensor,      # (B, N)
+        volume: torch.Tensor,   # (B, N)
+        time: torch.Tensor,     # (B,)
+    ) -> None:
+        self.V_prev = self.V.detach().clone()   # (B,)
+
+        close  = close.to(self.dtype)
+        high   = high.to(self.dtype)
+        low    = low.to(self.dtype)
+        volume = volume.to(self.dtype)
+        t_new  = time.to(torch.float64) if isinstance(time, torch.Tensor) else torch.tensor(time, dtype=torch.float64)
+
+        dt = (t_new - self.t).clamp(min=0.0).to(self.dtype)    # (B,) diff in f64 → convert
+        self.t = t_new
+
+        if self.tau_p_live is None:
+            self.p = close
+        else:
+            alpha_live = 1.0 - torch.exp(-dt / self.tau_p_live)    # (B,)
+            self.p = self.p + alpha_live[:, None] * (close - self.p)
+
+        # alpha_p: (B, M, 1) — broadcasts over the N dimension
+        alpha_p = 1.0 - torch.exp(
+            -dt[:, None, None] / self.tau_p[None, :, None].clamp(min=self.eps)
+        )
+
+        p_exp = self.p[:, None, :]                                  # (B, 1, N)
+        self.p_smooth = self.p_smooth + alpha_p * (p_exp - self.p_smooth)
+        self.p_rel    = (p_exp - self.p_smooth) / self.p_smooth.clamp(min=self.eps)
+
+        hl_new  = self._hl_rel(high, low)                           # (B, N)
+        self.hl_rel = hl_new
+        hl_exp  = hl_new[:, None, :]
+        self.hl_smooth = self.hl_smooth + alpha_p * (hl_exp - self.hl_smooth)
+        self.vol_rel   = (hl_exp - self.hl_smooth) / self.hl_smooth.clamp(min=self.eps)
+
+        self.v = volume * self.p if self.use_dollar_volume else volume
+        v_exp  = self.v[:, None, :]
+        self.v_smooth = self.v_smooth + alpha_p * (v_exp - self.v_smooth)
+        self.v_rel    = (v_exp - self.v_smooth) / self.v_smooth.clamp(min=self.eps)
+
+    def _trade(self, actions: torch.Tensor) -> None:
+        """
+        Execute actions for all B environments in parallel.
+        actions: (B,) int tensor.
+        Updates C, w, invested, realized_cost, realized_pnl in-place.
+        """
+        B, N, K = self.B, self.N, self.K
+        b = self._b_idx   # (B,)
+
+        self.realized_cost = torch.zeros(B, N, dtype=self.dtype)
+        self.realized_pnl  = torch.zeros(B, N, dtype=self.dtype)
+
+        sell_offset = 1 + N * K
+        is_buy  = (actions >= 1) & (actions < sell_offset)     # (B,)
+        is_sell = actions >= sell_offset                        # (B,)
+
+        # ---- BUY ----
+        buy_z      = (actions - 1).clamp(min=0)                # (B,)
+        buy_asset  = (buy_z // K).clamp(0, N - 1)              # (B,)
+        buy_bucket = buy_z % K                                  # (B,)
+
+        buy_frac   = self.size_buckets[buy_bucket]              # (B,)
+        buy_budget = buy_frac * self.C                          # (B,)
+        buy_dollars = buy_budget - self.b_fee                   # (B,)
+        buy_valid  = is_buy & (buy_budget > self.b_fee) & (buy_dollars >= self.min_buy_dollars)
+
+        buy_price  = self.p[b, buy_asset].clamp(min=self.eps)  # (B,)
+        buy_units  = buy_dollars / buy_price                    # (B,)
+        total_cost = torch.minimum(buy_budget, self.C)          # (B,) safety clamp
+
+        bv = buy_valid.to(self.dtype)
+        self.C -= total_cost * bv
+        self.w.scatter_add_(1, buy_asset[:, None], (buy_units * bv)[:, None])
+        self.invested.scatter_add_(1, buy_asset[:, None], (total_cost * bv)[:, None])
+
+        # ---- SELL ----
+        sell_z      = (actions - sell_offset).clamp(min=0)     # (B,)
+        sell_asset  = (sell_z // K).clamp(0, N - 1)            # (B,)
+        sell_bucket = sell_z % K                               # (B,)
+
+        sell_frac   = self.size_buckets[sell_bucket]            # (B,)
+        units_held  = self.w[b, sell_asset]                     # (B,)
+        units_to_sell = sell_frac * units_held                  # (B,)
+        sell_value  = units_to_sell * self.p[b, sell_asset]    # (B,)
+        sell_valid  = is_sell & (units_held > 0.0) & (sell_value > self.s_fee)
+
+        pos_frac    = (units_to_sell / units_held.clamp(min=self.eps)).clamp(0.0, 1.0)
+        rc          = pos_frac * self.invested[b, sell_asset]   # realized cost  (B,)
+        proceeds    = (sell_value - self.s_fee).clamp(min=0.0)
+        pre_tax_pnl = proceeds - rc
+        net_proceeds = proceeds - pre_tax_pnl.clamp(min=0.0) * self.tax_rate
+        rpnl        = net_proceeds - rc
+
+        sv = sell_valid.to(self.dtype)
+        self.C += net_proceeds * sv
+        self.w.scatter_add_(1, sell_asset[:, None], -(units_to_sell * sv)[:, None])
+        self.invested.scatter_add_(1, sell_asset[:, None], -(rc * sv)[:, None])
+        self.realized_cost.scatter_add_(1, sell_asset[:, None], (rc * sv)[:, None])
+        self.realized_pnl.scatter_add_(1, sell_asset[:, None], (rpnl * sv)[:, None])
+
+        # dust cleanup
+        dust = (self.w * self.p) < self.transaction_eps         # (B, N)
+        self.w        = self.w.masked_fill(dust, 0.0)
+        self.invested = self.invested.masked_fill(dust, 0.0)
+        self.C        = self.C.clamp(min=0.0)
+
+    def _reward(self) -> torch.Tensor:
+        has_realized = self.realized_cost.sum(dim=1) > self.eps     # (B,)
+        roi = self.realized_pnl.sum(dim=1) / self.realized_cost.sum(dim=1).clamp(min=self.eps)
+        V   = self.V
+        if self.reward_mode == "return":
+            baseline = self.val_coeff * (V - self.V_prev) / self.V_prev.clamp(min=self.eps)
+        else:
+            baseline = self.val_coeff * torch.log(V / self.V_prev.clamp(min=self.eps))
+        return torch.where(has_realized, self.roi_coeff * roi, baseline)    # (B,)
+
+    # -------------------------------------------------------------------------
+    # public step / mask
+    # -------------------------------------------------------------------------
+
+    def step(
+        self,
+        actions: torch.Tensor,  # (B,) int
+        close: torch.Tensor,    # (B, N)
+        high: torch.Tensor,     # (B, N)
+        low: torch.Tensor,      # (B, N)
+        volume: torch.Tensor,   # (B, N)
+        time: torch.Tensor,     # (B,)
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Returns obs (B, state_dim), rewards (B,), dones (B,)."""
+        self._trade(actions)
+        self._update(close, high, low, volume, time)
+        rewards = self._reward()
+        dones   = self.V <= self.bankruptcy_threshold               # (B,) bool
+        rewards = torch.where(dones, rewards - self.done_reward_penalty, rewards)
+        return self._obs(), rewards, dones
+
+    def valid_action_mask(self) -> torch.Tensor:
+        """Returns (B, action_dim) bool tensor."""
+        B, N, K = self.B, self.N, self.K
+        mask = torch.zeros(B, self.action_dim, dtype=torch.bool)
+        mask[:, 0] = True   # hold always valid
+
+        for b_idx in range(K):
+            frac      = float(self.size_buckets[b_idx].item())
+            budget    = frac * self.C                               # (B,)
+            buy_valid = (budget > self.b_fee) & ((budget - self.b_fee) >= self.min_buy_dollars)
+            for k in range(N):
+                mask[:, self.encode_buy(k, b_idx)] = buy_valid
+
+        for k in range(N):
+            units = self.w[:, k]
+            price = self.p[:, k]
+            for b_idx in range(K):
+                frac = float(self.size_buckets[b_idx].item())
+                mask[:, self.encode_sell(k, b_idx)] = (units > 0.0) & (frac * units * price > self.s_fee)
+
+        return mask

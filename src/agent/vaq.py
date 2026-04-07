@@ -715,6 +715,134 @@ class VAQAgent:
 
         return total_loss, total_reward, total_info
 
+    def train_on_historical_bat(
+        self,
+        bat_env,
+        close, high, low, volume, times,
+        n_episodes,
+        max_steps=2000,
+        warm_up=0,
+        update_interval=100,
+        n_updates=1,
+        lr=3e-4,
+        target_tau=0.005,
+        optim="AdamW",
+        init_optimizer=False,
+        store_results=True,
+        max_grad_norm=None,
+    ):
+        """
+        Train on a BatchedMultiCurrencyEnv using pre-stacked tensor data.
+
+        close, high, low, volume : (T, N) float tensors
+        times                    : (T,)  float64 tensor of Unix timestamps
+
+        Each episode picks B independent random start offsets. All B
+        environments step together — market data indexed as data[starts + step].
+        The buffer stores (B, ...) tensors per step; a single update() call
+        averages gradients over both the time and batch dimensions.
+
+        Returns (total_loss, total_reward).
+        """
+        if not hasattr(self, "optim") or init_optimizer:
+            self.init_optimizer(lr, optim=optim)
+
+        B = bat_env.B
+        dtype = bat_env.dtype
+        T = close.shape[0]
+
+        total_loss = []
+        total_reward = []
+
+        for episode in range(1, n_episodes + 1):
+            starts = torch.randint(T - max_steps, (B,))
+            obs = bat_env.reset(
+                close[starts], high[starts], low[starts], volume[starts], times[starts],
+            )
+            self.buffer.clear()
+
+            if store_results:
+                ep_reward = [[] for _ in range(B)]
+                ep_loss = []
+
+            step = 1
+            while step <= max_steps:
+                si = starts + step
+
+                if step > warm_up:
+                    masks = bat_env.valid_action_mask() if hasattr(bat_env, "valid_action_mask") else None
+                    actions = self.act(obs, explore=True, grad_enabled=False, mask=masks)
+                    step_actions = actions
+                else:
+                    actions = None
+                    step_actions = torch.zeros(B, dtype=torch.long)
+
+                next_obs, rewards, dones = bat_env.step(
+                    step_actions, close[si], high[si], low[si], volume[si], times[si],
+                )
+
+                if store_results and actions is not None:
+                    for i in range(B):
+                        ep_reward[i].append(float(rewards[i]))
+
+                terminal = bool(dones.any()) or step >= max_steps
+
+                if step > warm_up:
+                    self.buffer.store(
+                        obs.detach(),
+                        actions.detach(),
+                        rewards.to(dtype=dtype),
+                        dones.to(dtype=dtype),
+                    )
+
+                    rollout_ready = len(self.buffer) >= update_interval
+
+                    if (rollout_ready or terminal) and len(self.buffer) > 2:
+                        loss_dict = self.update(
+                            last_next_state=next_obs,
+                            k_epochs=n_updates,
+                            max_grad_norm=max_grad_norm,
+                            target_tau=target_tau,
+                        )
+                        self.buffer.clear()
+
+                        if store_results:
+                            ep_loss.append(loss_dict)
+
+                        msg = (
+                            f"episode {episode} [{100*step/max_steps:.1f}%]"
+                            f" - mean reward: {rewards.mean():.5f}"
+                            f" - mean V: {bat_env.V.mean():.2f}"
+                        )
+                        for key, val in loss_dict.items():
+                            msg += f" - {key}: {sum(val) / len(val):.5f}"
+                        print(msg, end="\r")
+
+                    if terminal:
+                        break
+                else:
+                    if terminal:
+                        break
+                    if step % update_interval == 1:
+                        print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
+
+                obs = next_obs
+                step += 1
+
+            if store_results:
+                total_loss.append(ep_loss)
+                total_reward.append(ep_reward)
+
+            all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
+            msg = f"episode {episode} - total reward: {sum(all_ep_rewards):.5f} ({B} envs)"
+            if store_results and len(ep_loss) > 0:
+                keys = ep_loss[0].keys()
+                for key in keys:
+                    msg += f" - {key}: {sum(sum(ld[key]) / len(ld[key]) for ld in ep_loss) / len(ep_loss):.5f}"
+            print(msg)
+
+        return total_loss, total_reward
+
 
 class RecurrentVAQAgent:
     """
@@ -1225,6 +1353,151 @@ class RecurrentVAQAgent:
             print(msg)
 
         return total_loss, total_reward, total_info
+
+    def train_on_historical_bat(
+        self,
+        bat_env,
+        close, high, low, volume, times,
+        n_episodes,
+        max_steps=2000,
+        warm_up=0,
+        update_interval=100,
+        n_updates=1,
+        burn_in_updates=0,
+        lr=3e-4,
+        target_tau=0.005,
+        optim="AdamW",
+        init_optimizer=False,
+        store_results=True,
+        max_grad_norm=None,
+    ):
+        """
+        Train on a BatchedMultiCurrencyEnv using pre-stacked tensor data.
+
+        close, high, low, volume : (T, N) float tensors
+        times                    : (T,)  float64 tensor of Unix timestamps
+
+        Each episode picks B independent random start offsets. All B
+        environments step together — market data indexed as data[starts + step].
+        The buffer stores (B, ...) tensors per step; a single update() call
+        averages gradients over both the time and batch dimensions.
+
+        `burn_in_updates` skips the first N gradient updates after warm-up so
+        the shared recurrent state can stabilise before training begins.
+
+        Returns (total_loss, total_reward).
+        """
+        if not hasattr(self, "optim") or init_optimizer:
+            self.init_optimizer(lr, optim=optim)
+
+        B = bat_env.B
+        dtype = bat_env.dtype
+        T = close.shape[0]
+
+        total_loss = []
+        total_reward = []
+
+        for episode in range(1, n_episodes + 1):
+            self.net.reset(B)
+            h0 = self.net.get_states(clone=True, detach=True)
+            burn_in = burn_in_updates
+
+            starts = torch.randint(T - max_steps, (B,))
+            obs = bat_env.reset(
+                close[starts], high[starts], low[starts], volume[starts], times[starts],
+            )
+            self.buffer.clear()
+
+            if store_results:
+                ep_reward = [[] for _ in range(B)]
+                ep_loss = []
+
+            step = 1
+            while step <= max_steps:
+                si = starts + step
+
+                if step > warm_up:
+                    masks = bat_env.valid_action_mask() if hasattr(bat_env, "valid_action_mask") else None
+                    actions = self.act(obs, explore=True, grad_enabled=False, mask=masks)
+                    step_actions = actions
+                else:
+                    actions = None
+                    step_actions = torch.zeros(B, dtype=torch.long)
+
+                next_obs, rewards, dones = bat_env.step(
+                    step_actions, close[si], high[si], low[si], volume[si], times[si],
+                )
+
+                if store_results and actions is not None:
+                    for i in range(B):
+                        ep_reward[i].append(float(rewards[i]))
+
+                terminal = bool(dones.any()) or step >= max_steps
+
+                if step > warm_up:
+                    self.buffer.store(
+                        obs.detach(),
+                        actions.detach(),
+                        rewards.to(dtype=dtype),
+                        dones.to(dtype=dtype),
+                    )
+
+                    rollout_ready = len(self.buffer) >= update_interval
+
+                    if (rollout_ready or terminal) and len(self.buffer) > 2:
+                        h_t = self.net.get_states(clone=True, detach=True)
+
+                        if burn_in > 0:
+                            burn_in -= 1
+                        else:
+                            loss_dict = self.update(
+                                last_next_state=next_obs,
+                                k_epochs=n_updates,
+                                h0=h0,
+                                max_grad_norm=max_grad_norm,
+                                target_tau=target_tau,
+                            )
+                            if store_results:
+                                ep_loss.append(loss_dict)
+
+                            msg = (
+                                f"episode {episode} [{100*step/max_steps:.1f}%]"
+                                f" - avg. reward: {rewards.mean():.5f}"
+                                f" - avg. portfolio: {bat_env.V.mean():.2f}"
+                            )
+                            for key, val in loss_dict.items():
+                                msg += f" - {key}: {sum(val) / len(val):.5f}"
+                            print(msg, end="\r")
+
+                        # Restore the live hidden state (update's forward_seq rewrites it)
+                        self.net.set_states(h_t, clone=True, detach=True)
+                        h0 = self.net.get_states(clone=True, detach=True)
+                        self.buffer.clear()
+
+                    if terminal:
+                        break
+                else:
+                    if terminal:
+                        break
+                    if step % update_interval == 1:
+                        print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
+
+                obs = next_obs
+                step += 1
+
+            if store_results:
+                total_loss.append(ep_loss)
+                total_reward.append(ep_reward)
+
+            all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
+            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - avg. reward: {sum(all_ep_rewards) / B:.5f}"
+            if store_results and len(ep_loss) > 0:
+                keys = ep_loss[0].keys()
+                for key in keys:
+                    msg += f" - {key}: {sum(sum(ld[key]) / len(ld[key]) for ld in ep_loss) / len(ep_loss):.5f}"
+            print(msg)
+
+        return total_loss, total_reward
 
     def save(self, path: str):
         torch.save({
