@@ -5,8 +5,41 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from src.agent.buffer import Buffer
 from src.agent.utils import get_optimizer
+
+
+class Buffer:
+    def __init__(self, memory_size: int):
+        self.memory_size = memory_size
+        self.memory = []
+        self.idx = 0
+        self.full = False
+
+    def __len__(self):
+        return self.memory_size if self.full else self.idx
+
+    def store(self, state, action, next_state, reward, done):
+        transition = (state, action, next_state, reward, done)
+        if not self.full:
+            self.memory.append(transition)
+            self.idx += 1
+            if self.idx == self.memory_size:
+                self.full = True
+                self.idx = 0
+        else:
+            self.memory[self.idx] = transition
+            self.idx = (self.idx + 1) % self.memory_size
+
+    def sample(self, batch_size: int, device: str | torch.device, dtype: torch.dtype):
+        import random
+        batch = random.sample(self.memory, batch_size)
+        state, action, next_state, reward, done = zip(*batch)
+        state = torch.stack(state).to(dtype=dtype, device=device)
+        action = torch.stack(action).to(dtype=dtype, device=device)
+        next_state = torch.stack(next_state).to(dtype=dtype, device=device)
+        reward = torch.stack(reward).to(dtype=dtype, device=device)
+        done = torch.stack(done).to(dtype=dtype, device=device)
+        return state, action, next_state, reward, done
 
 
 @dataclass
