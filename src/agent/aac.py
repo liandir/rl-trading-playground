@@ -146,6 +146,45 @@ class RecurrentActionValueNetwork(torch.nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Advantage helpers
+# ---------------------------------------------------------------------------
+
+def _compute_gae(
+    rewards: torch.Tensor,
+    dones: torch.Tensor,
+    v_t: torch.Tensor,
+    v_tp1: torch.Tensor,
+    gamma: float,
+    lam: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Generalised Advantage Estimation (Schulman et al., 2016).
+
+    delta_t = r_t + gamma * (1 - done_t) * V(s_{t+1}) - V(s_t)
+    A_t^GAE = sum_{k>=0} (gamma * lambda)^k * delta_{t+k}
+
+    Returns (advantages, returns) where returns = advantages + V(s_t),
+    used as targets for the value loss.
+
+    rewards, dones, v_t, v_tp1 : (T, ...) — leading time dimension first.
+    """
+    deltas = rewards + gamma * (1.0 - dones) * v_tp1 - v_t
+
+    shape    = deltas.shape
+    T        = shape[0]
+    gae      = torch.zeros(shape[1:], device=deltas.device, dtype=deltas.dtype)
+    adv_list = []
+
+    for t in reversed(range(T)):
+        gae = deltas[t] + gamma * lam * (1.0 - dones[t]) * gae
+        adv_list.append(gae)
+
+    advantages = torch.stack(list(reversed(adv_list)), dim=0)  # (T, ...)
+    returns    = advantages + v_t
+    return advantages, returns
+
+
+# ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
 
@@ -281,6 +320,8 @@ class AACAgent:
         vf_coef: float = 0.5,
         ent_coef: float = 0.01,
         normalize_advantages: bool = True,
+        advantage_type: str = "td0",
+        gae_lambda: float = 0.95,
         hidden_dims: list[int] = None,
         hidden_dims_actor: list[int] = None,
         hidden_dims_v: list[int] = None,
@@ -288,10 +329,14 @@ class AACAgent:
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
     ):
+        if advantage_type not in ("td0", "gae"):
+            raise ValueError(f"advantage_type must be 'td0' or 'gae', got '{advantage_type}'.")
         self.gamma                = gamma
         self.vf_coef              = vf_coef
         self.ent_coef             = ent_coef
         self.normalize_advantages = normalize_advantages
+        self.advantage_type       = advantage_type
+        self.gae_lambda           = gae_lambda
         self.dtype                = dtype
         self.device               = torch.device(device)
         self.state_dim            = state_dim
@@ -336,7 +381,7 @@ class AACAgent:
         opt_cls    = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
-    def compute_returns(
+    def compute_advantages(
         self,
         last_next_state: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -348,15 +393,18 @@ class AACAgent:
         with torch.no_grad():
             last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
             all_states = torch.cat([states, last_next_state[None]], dim=0)
-            _, values_all = self.net(all_states)   # shape: (T+1, [B,])
+            _, values_all = self.net(all_states)   # (T+1, [B,])
 
             v_t   = values_all[:-1]
             v_tp1 = values_all[1:]
 
-            returns      = rewards + self.gamma * (1.0 - dones) * v_tp1
-            raw_adv      = returns - v_t
-            advantages   = raw_adv
+            if self.advantage_type == "gae":
+                raw_adv, returns = _compute_gae(rewards, dones, v_t, v_tp1, self.gamma, self.gae_lambda)
+            else:  # td0
+                returns = rewards + self.gamma * (1.0 - dones) * v_tp1
+                raw_adv = returns - v_t
 
+            advantages = raw_adv
             if self.normalize_advantages:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
 
@@ -374,7 +422,7 @@ class AACAgent:
             return _empty_update_metrics()
 
         metrics = _init_update_metrics()
-        advantages, raw_adv, returns, states, actions = self.compute_returns(last_next_state)
+        advantages, raw_adv, returns, states, actions = self.compute_advantages(last_next_state)
 
         for _ in range(k_epochs):
             logits, values = self.net(states)
@@ -758,6 +806,8 @@ class RecurrentAACAgent:
         vf_coef: float = 0.5,
         ent_coef: float = 0.01,
         normalize_advantages: bool = True,
+        advantage_type: str = "td0",
+        gae_lambda: float = 0.95,
         hidden_dims: list[int] = None,
         hidden_dims_actor: list[int] = None,
         hidden_dims_v: list[int] = None,
@@ -767,10 +817,14 @@ class RecurrentAACAgent:
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
     ):
+        if advantage_type not in ("td0", "gae"):
+            raise ValueError(f"advantage_type must be 'td0' or 'gae', got '{advantage_type}'.")
         self.gamma                = gamma
         self.vf_coef              = vf_coef
         self.ent_coef             = ent_coef
         self.normalize_advantages = normalize_advantages
+        self.advantage_type       = advantage_type
+        self.gae_lambda           = gae_lambda
         self.dtype                = dtype
         self.device               = torch.device(device)
         self.state_dim            = state_dim
@@ -827,7 +881,7 @@ class RecurrentAACAgent:
         opt_cls    = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
-    def compute_returns(
+    def compute_advantages(
         self,
         last_next_state: torch.Tensor,
         h0: dict | None = None,
@@ -848,10 +902,13 @@ class RecurrentAACAgent:
             v_t   = values_all[:-1]
             v_tp1 = values_all[1:]
 
-            returns    = rewards + self.gamma * (1.0 - dones) * v_tp1
-            raw_adv    = returns - v_t
-            advantages = raw_adv
+            if self.advantage_type == "gae":
+                raw_adv, returns = _compute_gae(rewards, dones, v_t, v_tp1, self.gamma, self.gae_lambda)
+            else:  # td0
+                returns = rewards + self.gamma * (1.0 - dones) * v_tp1
+                raw_adv = returns - v_t
 
+            advantages = raw_adv
             if self.normalize_advantages:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
 
@@ -870,7 +927,7 @@ class RecurrentAACAgent:
             return _empty_update_metrics()
 
         metrics = _init_update_metrics()
-        advantages, raw_adv, returns, states, actions = self.compute_returns(last_next_state, h0=h0)
+        advantages, raw_adv, returns, states, actions = self.compute_advantages(last_next_state, h0=h0)
 
         for _ in range(k_epochs):
             logits, values = self.infer_from_seq(states, h0=h0)
