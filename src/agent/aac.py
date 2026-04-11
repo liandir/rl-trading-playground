@@ -18,13 +18,13 @@ class ActionValueNetwork(torch.nn.Module):
         action_dim,
         hidden_dims=None,
         hidden_dims_actor=None,
-        hidden_dims_v=None,
+        hidden_dims_value=None,
         activation=torch.relu,
     ):
         super().__init__()
         hidden_dims       = hidden_dims or []
         hidden_dims_actor = hidden_dims_actor or []
-        hidden_dims_v     = hidden_dims_v or []
+        hidden_dims_value = hidden_dims_value or []
 
         self.state_dim  = state_dim
         self.action_dim = action_dim
@@ -37,7 +37,7 @@ class ActionValueNetwork(torch.nn.Module):
             prev = h
 
         self.actor  = VanillaNetwork(prev, action_dim, hidden_dims=hidden_dims_actor, activation=activation)
-        self.v_head = VanillaNetwork(prev, 1,          hidden_dims=hidden_dims_v,     activation=activation)
+        self.v_head = VanillaNetwork(prev, 1,          hidden_dims=hidden_dims_value, activation=activation)
 
     def forward(self, x):
         shape = x.shape  # (..., state_dim)
@@ -58,7 +58,7 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         action_dim,
         hidden_dims=None,
         hidden_dims_actor=None,
-        hidden_dims_v=None,
+        hidden_dims_value=None,
         activation=torch.tanh,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
@@ -66,7 +66,7 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         super().__init__()
         hidden_dims       = hidden_dims or []
         hidden_dims_actor = hidden_dims_actor or []
-        hidden_dims_v     = hidden_dims_v or []
+        hidden_dims_value = hidden_dims_value or []
 
         self.state_dim       = state_dim
         self.action_dim      = action_dim
@@ -89,7 +89,7 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         )
         self.v_head = RecurrentNetwork(
             prev, 1,
-            hidden_dims=hidden_dims_v,
+            hidden_dims=hidden_dims_value,
             activation=activation,
             recurrent_type=recurrent_type,
             recurrent_kwargs=self.recurrent_kwargs,
@@ -181,6 +181,7 @@ def _compute_gae(
 
     advantages = torch.stack(list(reversed(adv_list)), dim=0)  # (T, ...)
     returns    = advantages + v_t
+    
     return advantages, returns
 
 
@@ -324,7 +325,7 @@ class AACAgent:
         gae_lambda: float = 0.95,
         hidden_dims: list[int] = None,
         hidden_dims_actor: list[int] = None,
-        hidden_dims_v: list[int] = None,
+        hidden_dims_value: list[int] = None,
         activation: callable = torch.relu,
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
@@ -347,7 +348,7 @@ class AACAgent:
             action_dim=action_dim,
             hidden_dims=hidden_dims,
             hidden_dims_actor=hidden_dims_actor,
-            hidden_dims_v=hidden_dims_v,
+            hidden_dims_value=hidden_dims_value,
             activation=activation,
         ).to(device=self.device, dtype=self.dtype)
 
@@ -810,7 +811,7 @@ class RecurrentAACAgent:
         gae_lambda: float = 0.95,
         hidden_dims: list[int] = None,
         hidden_dims_actor: list[int] = None,
-        hidden_dims_v: list[int] = None,
+        hidden_dims_value: list[int] = None,
         activation: callable = torch.tanh,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
@@ -835,7 +836,7 @@ class RecurrentAACAgent:
             action_dim=action_dim,
             hidden_dims=hidden_dims,
             hidden_dims_actor=hidden_dims_actor,
-            hidden_dims_v=hidden_dims_v,
+            hidden_dims_value=hidden_dims_value,
             activation=activation,
             recurrent_type=recurrent_type,
             recurrent_kwargs=recurrent_kwargs,
@@ -1330,7 +1331,11 @@ class RecurrentAACAgent:
                 total_reward.append(ep_reward)
 
             all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
-            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f} - avg. portfolio: {bat_env.V.mean():.2f}"
+            msg = (
+                f"episode {episode} [{100*step/max_steps:.1f}%]"
+                f" - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f}"
+                f" - avg. portfolio: {bat_env.V.mean():.2f}"
+            )
             if store_results and len(ep_loss) > 0:
                 keys = ep_loss[0].keys()
                 for key in keys:
