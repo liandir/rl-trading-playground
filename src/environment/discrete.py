@@ -110,7 +110,6 @@ class MultiCurrencyEnv:
         buy_fee: float = 1.0,
         tax_rate: float = 0.26,
         min_buy_dollars: float = 10.0,
-        tau_p_live: Optional[float] = None,
         val_coeff: float = 1.0,
         roi_coeff: float = 1.0,
         reward_mode: str = "log",
@@ -125,9 +124,6 @@ class MultiCurrencyEnv:
         assert len(size_buckets) > 0, "size_buckets must not be empty"
         assert all(0.0 < x <= 1.0 for x in size_buckets), "all size buckets must be in (0, 1]"
         assert reward_mode in ("return", "log"), "reward_mode must be one of ('return', 'log')"
-        if tau_p_live is not None:
-            assert tau_p_live > 0.0, "tau_p_live must be > 0"
-            assert bool(torch.all(tau_p_live < tau_p).item()), "tau_p_live must be smaller than all tau_p"
 
         self.N = N
         self.dtype = dtype
@@ -138,7 +134,6 @@ class MultiCurrencyEnv:
         self.use_dollar_volume = bool(use_dollar_volume)
         self.tax_rate = float(tax_rate)
         self.min_buy_dollars = float(min_buy_dollars)
-        self.tau_p_live = float(tau_p_live) if tau_p_live is not None else None
         self.val_coeff = float(val_coeff)
         self.roi_coeff = float(roi_coeff)
 
@@ -391,8 +386,6 @@ class MultiCurrencyEnv:
 
         self.v_smooth = self.v[None, :].repeat(self.M, 1).clone()
 
-        # p_smooth tracks self.p (which equals close here, or the live-smoothed
-        # price when tau_p_live is set), not raw close directly.
         self.p_smooth = self.p[None, :].repeat(self.M, 1).clone()
         self.p_rel = torch.zeros((self.M, self.N), dtype=self.dtype)
         self.hl_rel = self._compute_hl_rel(high, low)
@@ -428,15 +421,8 @@ class MultiCurrencyEnv:
         self.dt = (t_new - self.t) * float(t_new > self.t)
         self.t = t_new
 
-        p_new = close
-        if self.tau_p_live is None:
-            self.p[:] = p_new
-        else:
-            alpha_live = 1 - torch.exp(torch.tensor(-self.dt / self.tau_p_live, dtype=self.dtype))
-            self.p += alpha_live * (p_new - self.p)
+        self.p[:] = close
 
-        # p_smooth tracks self.p: when tau_p_live is set this is a slow EMA of
-        # a fast EMA; when tau_p_live is None it tracks raw close.
         alpha_p = 1 - torch.exp(-self.dt / self.tau_p.clamp(min=self.eps))[:, None]
         self.p_smooth += alpha_p * (self.p[None, :] - self.p_smooth)
         self.p_rel = (self.p[None, :] - self.p_smooth) / self.p_smooth.clamp(min=self.eps)
@@ -666,7 +652,6 @@ class BatchedMultiCurrencyEnv:
         buy_fee: float = 1.0,
         tax_rate: float = 0.26,
         min_buy_dollars: float = 10.0,
-        tau_p_live: Optional[float] = None,
         val_coeff: float = 1.0,
         roi_coeff: float = 1.0,
         reward_mode: str = "log",
@@ -682,9 +667,6 @@ class BatchedMultiCurrencyEnv:
         assert len(size_buckets) > 0
         assert all(0.0 < x <= 1.0 for x in size_buckets)
         assert reward_mode in ("return", "log")
-        if tau_p_live is not None:
-            assert tau_p_live > 0.0
-            assert bool(torch.all(tau_p_live < tau_p).item())
 
         self.B = B
         self.N = N
@@ -696,7 +678,6 @@ class BatchedMultiCurrencyEnv:
         self.use_dollar_volume = bool(use_dollar_volume)
         self.tax_rate = float(tax_rate)
         self.min_buy_dollars = float(min_buy_dollars)
-        self.tau_p_live = float(tau_p_live) if tau_p_live is not None else None
         self.val_coeff = float(val_coeff)
         self.roi_coeff = float(roi_coeff)
         self.reward_mode = reward_mode
@@ -883,11 +864,7 @@ class BatchedMultiCurrencyEnv:
         dt = (t_new - self.t).clamp(min=0.0).to(self.dtype)    # (B,) diff in f64 → convert
         self.t = t_new
 
-        if self.tau_p_live is None:
-            self.p = close
-        else:
-            alpha_live = 1.0 - torch.exp(-dt / self.tau_p_live)    # (B,)
-            self.p = self.p + alpha_live[:, None] * (close - self.p)
+        self.p = close
 
         # alpha_p: (B, M, 1) — broadcasts over the N dimension
         alpha_p = 1.0 - torch.exp(
