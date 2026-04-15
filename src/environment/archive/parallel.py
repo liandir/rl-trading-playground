@@ -1,5 +1,5 @@
 import torch
-from src.environment.discrete import MultiCurrencyEnv, State
+from src.environment.discrete.discrete_buckets import MultiCurrencyEnv, State
 
 
 class VecMultiCurrencyEnv:

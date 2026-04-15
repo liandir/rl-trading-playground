@@ -5,7 +5,7 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from src.agent.utils import get_optimizer
+from src.agent.archive.utils import get_optimizer
 
 
 class Buffer:

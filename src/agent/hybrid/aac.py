@@ -1,188 +1,111 @@
 import torch
 from torch import distributions
 
-from src.network.vanilla import VanillaNetwork
-from src.network.recurrent import RecurrentNetwork, _build_recurrent_cell
+from src.agent.discrete.aac import (
+    apply_action_mask,
+    _compute_gae,
+    _explained_variance,
+    _fmt_sim_elapsed,
+)
+from src.agent.hybrid.network import (
+    HybridActionValueNetwork,
+    RecurrentHybridActionValueNetwork,
+)
 
 
 # ---------------------------------------------------------------------------
-# Network modules
+# Hybrid policy — discrete (masked categorical) + continuous (Beta) heads
+# ---------------------------------------------------------------------------
+#
+# Action space:
+#   a_d ∈ {hold} ∪ {buy_i}_{i=1..N} ∪ {sell_i}_{i=1..N}         |A_d| = 2N + 1
+#   a_c ∈ (0, 1)                                                  (amount fraction)
+#
+# Joint policy factorises as
+#   π(a_d, a_c | s) = π_d(a_d | s) · π_c(a_c | s) · 1[a_d ≠ hold]
+#
+# Both heads share a trunk φ(s) and are conditionally independent given s.
+# The continuous action is irrelevant when a_d = hold — its log-prob is
+# masked out and does not enter the objective.
+#
+# Hold is assumed to be index 0 of the discrete action space.
 # ---------------------------------------------------------------------------
 
-class ActionValueNetwork(torch.nn.Module):
-    """Shared feedforward trunk with categorical-policy and scalar-value heads."""
 
-    def __init__(
-        self,
-        state_dim,
-        action_dim,
-        hidden_dims=None,
-        hidden_dims_actor=None,
-        hidden_dims_value=None,
-        activation=torch.relu,
-    ):
-        super().__init__()
-        hidden_dims       = hidden_dims or []
-        hidden_dims_actor = hidden_dims_actor or []
-        hidden_dims_value = hidden_dims_value or []
-
-        self.state_dim  = state_dim
-        self.action_dim = action_dim
-        self.activation = activation
-
-        self.layers = torch.nn.ModuleList()
-        prev = state_dim
-        for h in hidden_dims:
-            self.layers.append(torch.nn.Linear(prev, h))
-            prev = h
-
-        self.actor  = VanillaNetwork(prev, action_dim, hidden_dims=hidden_dims_actor, activation=activation)
-        self.v_head = VanillaNetwork(prev, 1,          hidden_dims=hidden_dims_value, activation=activation)
-
-    def forward(self, x):
-        shape = x.shape  # (..., state_dim)
-        z = x.reshape(-1, self.state_dim)
-        for layer in self.layers:
-            z = self.activation(layer(z))
-        logits = self.actor(z).view(*shape[:-1], self.action_dim)
-        values = self.v_head(z).squeeze(-1).view(*shape[:-1])
-        return logits, values
-
-
-class RecurrentActionValueNetwork(torch.nn.Module):
-    """Shared recurrent trunk with categorical-policy and scalar-value heads."""
-
-    def __init__(
-        self,
-        state_dim,
-        action_dim,
-        hidden_dims=None,
-        hidden_dims_actor=None,
-        hidden_dims_value=None,
-        activation=torch.tanh,
-        recurrent_type: str = "simple",
-        recurrent_kwargs: dict | None = None,
-    ):
-        super().__init__()
-        hidden_dims       = hidden_dims or []
-        hidden_dims_actor = hidden_dims_actor or []
-        hidden_dims_value = hidden_dims_value or []
-
-        self.state_dim       = state_dim
-        self.action_dim      = action_dim
-        self.activation      = activation
-        self.recurrent_type  = recurrent_type
-        self.recurrent_kwargs = dict(recurrent_kwargs or {})
-
-        self.layers = torch.nn.ModuleList()
-        prev = state_dim
-        for h in hidden_dims:
-            self.layers.append(_build_recurrent_cell(prev, h, activation, recurrent_type, self.recurrent_kwargs))
-            prev = h
-
-        self.actor = RecurrentNetwork(
-            prev, action_dim,
-            hidden_dims=hidden_dims_actor,
-            activation=activation,
-            recurrent_type=recurrent_type,
-            recurrent_kwargs=self.recurrent_kwargs,
-        )
-        self.v_head = RecurrentNetwork(
-            prev, 1,
-            hidden_dims=hidden_dims_value,
-            activation=activation,
-            recurrent_type=recurrent_type,
-            recurrent_kwargs=self.recurrent_kwargs,
-        )
-
-    def reset(self, batch_size: int = 1):
-        device = next(self.parameters()).device
-        dtype  = next(self.parameters()).dtype
-        for layer in self.layers:
-            layer.reset(batch_size, device=device, dtype=dtype)
-        self.actor.reset(batch_size, device=device, dtype=dtype)
-        self.v_head.reset(batch_size, device=device, dtype=dtype)
-
-    def forward(self, x):
-        z = x.reshape(-1, self.state_dim)
-        for layer in self.layers:
-            z = layer(z)
-        logits = self.actor(z).view(-1, self.action_dim)
-        values = self.v_head(z).view(-1)
-        return logits, values
-
-    def forward_seq(self, x_seq):
-        z_seq = x_seq
-        for layer in self.layers:
-            z_seq = layer.forward_seq(z_seq)
-        logits = self.actor.forward_seq(z_seq)          # (T, [B,] A)
-        values = self.v_head.forward_seq(z_seq).squeeze(-1)  # (T, [B,])
-        return logits, values
-
-    def get_states(self, clone: bool = True, detach: bool = True) -> dict:
-        trunk  = [cell.get_state(clone=clone, detach=detach) for cell in self.layers]
-        actor  = self.actor.get_states(clone=clone, detach=detach)
-        v_head = self.v_head.get_states(clone=clone, detach=detach)
-        return {"trunk": trunk, "actor": actor, "v": v_head}
-
-    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
-        if strict:
-            for key in ("trunk", "actor", "v"):
-                if key not in states:
-                    raise KeyError(f"Missing key '{key}' in states snapshot.")
-
-        trunk_states = states.get("trunk", [])
-        actor_states = states.get("actor", [])
-        v_states     = states.get("v", [])
-
-        if strict and len(trunk_states) != len(self.layers):
-            raise ValueError(f"Expected {len(self.layers)} trunk states, got {len(trunk_states)}.")
-
-        for cell, state in zip(self.layers, trunk_states):
-            cell.set_state(state, clone=clone, detach=detach)
-
-        self.actor.set_states(actor_states, clone=clone, detach=detach, strict=strict)
-        self.v_head.set_states(v_states,    clone=clone, detach=detach, strict=strict)
+HOLD_INDEX = 0
+AC_EPS     = 1e-4
 
 
 # ---------------------------------------------------------------------------
-# Advantage helpers
+# Hybrid policy helpers (sampling, log-prob, entropy)
 # ---------------------------------------------------------------------------
 
-def _compute_gae(
-    rewards: torch.Tensor,
-    dones: torch.Tensor,
-    v_t: torch.Tensor,
-    v_tp1: torch.Tensor,
-    gamma: float,
-    lam: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
+def _build_hybrid_dist(
+    logits: torch.Tensor,
+    alpha: torch.Tensor,
+    beta: torch.Tensor,
+    valid_mask: torch.BoolTensor | None = None,
+) -> tuple[distributions.Categorical, distributions.Beta]:
+    if valid_mask is not None:
+        logits = apply_action_mask(logits, valid_mask)
+    cat  = distributions.Categorical(logits=logits)
+    beta = distributions.Beta(alpha, beta)
+    return cat, beta
+
+
+def _hybrid_log_prob(
+    cat: distributions.Categorical,
+    beta_dist: distributions.Beta,
+    action_d: torch.Tensor,
+    action_c: torch.Tensor,
+) -> torch.Tensor:
+    """log π(a_d, a_c | s) = log π_d(a_d|s) + 1[a_d != hold] · log π_c(a_c|s)."""
+    logp_d     = cat.log_prob(action_d.long())
+    ac_clamped = action_c.clamp(AC_EPS, 1.0 - AC_EPS)
+    logp_c     = beta_dist.log_prob(ac_clamped)
+    nonhold    = (action_d != HOLD_INDEX).to(dtype=logp_d.dtype)
+    return logp_d + nonhold * logp_c
+
+
+def _hybrid_entropy_components(
+    cat: distributions.Categorical,
+    beta_dist: distributions.Beta,
+    valid_mask: torch.BoolTensor | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Generalised Advantage Estimation (Schulman et al., 2016).
+    H(π) = ~H_d(π_d) + P[a_d != hold] · H(π_c)
 
-    delta_t = r_t + gamma * (1 - done_t) * V(s_{t+1}) - V(s_t)
-    A_t^GAE = sum_{k>=0} (gamma * lambda)^k * delta_{t+k}
+    ~H_d is the raw categorical entropy normalised by log(K(s)), where K(s) is
+    the number of valid actions (∥m(s)∥₀). K(s) is clamped at 2 so log(K) ≥
+    log(2); when K(s) = 1 the raw entropy is already 0 and the ratio collapses.
 
-    Returns (advantages, returns) where returns = advantages + V(s_t),
-    used as targets for the value loss.
-
-    rewards, dones, v_t, v_tp1 : (T, ...) — leading time dimension first.
+    The continuous term uses Beta differential entropy, whose maximum on [0, 1]
+    is 0 and whose value is usually negative. Detaching P[a_d != hold] prevents
+    that negative term from creating a spurious discrete-policy incentive to
+    collapse into hold. The continuous head still receives entropy gradients.
     """
-    deltas = rewards + gamma * (1.0 - dones) * v_tp1 - v_t
+    raw_entropy_d = cat.entropy()
+    if valid_mask is not None:
+        k      = valid_mask.sum(dim=-1).to(dtype=raw_entropy_d.dtype)
+        log_k  = torch.log(k.clamp(min=2))
+        ent_d  = raw_entropy_d / log_k
+    else:
+        ent_d  = raw_entropy_d
 
-    shape    = deltas.shape
-    T        = shape[0]
-    gae      = torch.zeros(shape[1:], device=deltas.device, dtype=deltas.dtype)
-    adv_list = []
+    probs_d   = cat.probs
+    nonhold_p = 1.0 - probs_d[..., HOLD_INDEX]
+    ent_c     = beta_dist.entropy()
+    ent_c_weighted = nonhold_p.detach() * ent_c
+    entropy = (ent_d + ent_c_weighted).mean()
+    return entropy, ent_d.mean(), ent_c.mean(), ent_c_weighted.mean()
 
-    for t in reversed(range(T)):
-        gae = deltas[t] + gamma * lam * (1.0 - dones[t]) * gae
-        adv_list.append(gae)
 
-    advantages = torch.stack(list(reversed(adv_list)), dim=0)  # (T, ...)
-    returns    = advantages + v_t
-    
-    return advantages, returns
+def _hybrid_entropy(
+    cat: distributions.Categorical,
+    beta_dist: distributions.Beta,
+    valid_mask: torch.BoolTensor | None,
+) -> torch.Tensor:
+    return _hybrid_entropy_components(cat, beta_dist, valid_mask)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +116,9 @@ UPDATE_METRIC_NAMES = (
     "policy_objective",
     "value_loss",
     "entropy",
+    "entropy_discrete",
+    "entropy_continuous",
+    "entropy_continuous_weighted",
     "total_loss",
     "return_mean",
     "value_mean",
@@ -201,6 +127,9 @@ UPDATE_METRIC_NAMES = (
     "chosen_action_prob_mean",
     "policy_confidence_mean",
     "explained_variance",
+    "alpha_mean",
+    "beta_mean",
+    "nonhold_prob_mean",
 )
 
 
@@ -212,36 +141,37 @@ def _init_update_metrics() -> dict[str, list[float]]:
     return {name: [] for name in UPDATE_METRIC_NAMES}
 
 
-def _explained_variance(targets: torch.Tensor, residuals: torch.Tensor) -> torch.Tensor:
-    target_var = targets.var(unbiased=False)
-    if float(target_var.detach().cpu().item()) <= 1e-12:
-        return torch.zeros((), device=targets.device, dtype=targets.dtype)
-    return 1.0 - residuals.var(unbiased=False) / (target_var + 1e-12)
-
-
 def _append_update_metrics(
     metric_store: dict[str, list[float]],
     *,
     logits: torch.Tensor,
     log_probs: torch.Tensor,
+    alpha: torch.Tensor,
+    beta: torch.Tensor,
     values: torch.Tensor,
     returns: torch.Tensor,
     raw_advantages: torch.Tensor,
     policy_objective: torch.Tensor,
     value_loss: torch.Tensor,
     entropy: torch.Tensor,
+    entropy_discrete: torch.Tensor,
+    entropy_continuous: torch.Tensor,
+    entropy_continuous_weighted: torch.Tensor,
     loss: torch.Tensor,
 ):
-    probs                    = torch.softmax(logits.detach(), dim=-1)
-    values_detached          = values.detach()
-    returns_detached         = returns.detach()
-    raw_advantages_detached  = raw_advantages.detach()
-    residuals                = returns_detached - values_detached
+    probs                   = torch.softmax(logits.detach(), dim=-1)
+    values_detached         = values.detach()
+    returns_detached        = returns.detach()
+    raw_advantages_detached = raw_advantages.detach()
+    residuals               = returns_detached - values_detached
 
     metrics = {
         "policy_objective":        policy_objective.detach(),
         "value_loss":              value_loss.detach(),
         "entropy":                 entropy.detach(),
+        "entropy_discrete":        entropy_discrete.detach(),
+        "entropy_continuous":      entropy_continuous.detach(),
+        "entropy_continuous_weighted": entropy_continuous_weighted.detach(),
         "total_loss":              loss.detach(),
         "return_mean":             returns_detached.mean(),
         "value_mean":              values_detached.mean(),
@@ -250,6 +180,9 @@ def _append_update_metrics(
         "chosen_action_prob_mean": log_probs.detach().exp().mean(),
         "policy_confidence_mean":  probs.max(dim=-1).values.mean(),
         "explained_variance":      _explained_variance(returns_detached, residuals),
+        "alpha_mean":              alpha.detach().mean(),
+        "beta_mean":               beta.detach().mean(),
+        "nonhold_prob_mean":       (1.0 - probs[..., HOLD_INDEX]).mean(),
     }
     for name, value in metrics.items():
         metric_store[name].append(float(value.cpu().item()))
@@ -264,53 +197,53 @@ class RolloutBuffer:
         self.clear()
 
     def clear(self):
-        self.states  = []
-        self.actions = []
-        self.rewards = []
-        self.dones   = []
+        self.states       = []
+        self.actions_d    = []
+        self.actions_c    = []
+        self.rewards      = []
+        self.dones        = []
+        self.valid_masks  = []
 
-    def store(self, state, action, reward, done):
-        self.states.append(state)
-        self.actions.append(action)
-        self.rewards.append(reward)
-        self.dones.append(done)
+    def store(self, state, action_d, action_c, reward, done, valid_mask=None):
+        self.states     .append(state)
+        self.actions_d  .append(action_d)
+        self.actions_c  .append(action_c)
+        self.rewards    .append(reward)
+        self.dones      .append(done)
+        self.valid_masks.append(valid_mask)
 
     def __len__(self):
         return len(self.states)
 
     def to_tensors(self, device, dtype):
-        states  = torch.stack(self.states).to(device=device, dtype=dtype)
-        actions = torch.stack(self.actions).to(device=device, dtype=dtype)
-        rewards = torch.stack(self.rewards).to(device=device, dtype=dtype)
-        dones   = torch.stack(self.dones).to(device=device, dtype=dtype)
-        return states, actions, rewards, dones
+        states    = torch.stack(self.states   ).to(device=device, dtype=dtype)
+        actions_d = torch.stack(self.actions_d).to(device=device)
+        actions_c = torch.stack(self.actions_c).to(device=device, dtype=dtype)
+        rewards   = torch.stack(self.rewards  ).to(device=device, dtype=dtype)
+        dones     = torch.stack(self.dones    ).to(device=device, dtype=dtype)
+        valid_masks = None
+        if self.valid_masks and self.valid_masks[0] is not None:
+            valid_masks = torch.stack(self.valid_masks).to(device=device)
+        return states, actions_d, actions_c, rewards, dones, valid_masks
 
 
 # ---------------------------------------------------------------------------
-# AACAgent — feedforward
+# HybridAACAgent — feedforward
 # ---------------------------------------------------------------------------
 
 class AACAgent:
     """
-    Advantage Actor-Critic (feedforward).
+    Hybrid Advantage Actor-Critic (feedforward).
 
-    The network shares a feedforward trunk and splits into:
-      - an actor head that parameterises a categorical policy  pi(a|s)
-      - a value head that predicts a scalar baseline  V(s)
+    Joint policy factorises as
+        π(a_d, a_c | s) = π_d(a_d | s) · π_c(a_c | s) · 1[a_d ≠ hold]
 
-    Returns are computed by TD(0) bootstrapping with the current value function:
-        G_t = r_t + gamma * (1 - done_t) * V(s_{t+1})
+    Discrete head: masked categorical over {hold, buy_1..N, sell_1..N}.
+    Continuous head: Beta(α(s), β(s)) over the amount fraction a_c ∈ (0, 1).
+    Value head: scalar baseline V(s), action-independent.
 
-    Advantage subtracts the baseline:
-        A_t = G_t - V(s_t)
-
-    The joint loss is:
-        L = -E[log pi(a_t|s_t) * A_t.detach()]
-            + vf_coef * 0.5 * E[(G_t.detach() - V(s_t))^2]
-            - ent_coef * H(pi(.|s_t))
-
-    There is no target network: the value bootstrap V(s_{t+1}) is computed
-    once before the update loop and treated as a fixed target thereafter.
+    Loss:
+        L = -E[log π(a_d, a_c | s) · A]  +  vf_coef · E[(G - V)²]  -  ent_coef · H(π)
     """
 
     def __init__(
@@ -325,6 +258,7 @@ class AACAgent:
         gae_lambda: float = 0.95,
         hidden_dims: list[int] = None,
         hidden_dims_actor: list[int] = None,
+        hidden_dims_actor_c: list[int] = None,
         hidden_dims_value: list[int] = None,
         activation: callable = torch.relu,
         dtype: torch.dtype = torch.float32,
@@ -343,40 +277,48 @@ class AACAgent:
         self.state_dim            = state_dim
         self.action_dim           = action_dim
 
-        self.net = ActionValueNetwork(
+        self.net = HybridActionValueNetwork(
             state_dim=state_dim,
             action_dim=action_dim,
             hidden_dims=hidden_dims,
             hidden_dims_actor=hidden_dims_actor,
+            hidden_dims_actor_c=hidden_dims_actor_c,
             hidden_dims_value=hidden_dims_value,
             activation=activation,
         ).to(device=self.device, dtype=self.dtype)
 
         self.buffer = RolloutBuffer()
 
-    def infer_logits(self, state: torch.Tensor) -> torch.Tensor:
-        logits, _ = self.net(state)
-        return logits
+    def infer_heads(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        logits, alpha, beta, _ = self.net(state)
+        return logits, alpha, beta
 
     def act(
         self,
         state: torch.Tensor,
+        valid_mask: torch.BoolTensor | None = None,
         explore: bool = False,
         grad_enabled: bool = False,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         with torch.set_grad_enabled(grad_enabled):
-            state  = state.to(dtype=self.dtype, device=self.device)
-            logits = self.infer_logits(state)
+            state = state.to(dtype=self.dtype, device=self.device)
+            logits, alpha, beta = self.infer_heads(state)
+            if valid_mask is not None:
+                logits = apply_action_mask(logits, valid_mask.to(self.device))
+            cat  = distributions.Categorical(logits=logits)
+            dist = distributions.Beta(alpha, beta)
             if explore:
-                action = distributions.Categorical(logits=logits).sample().squeeze()
+                action_d = cat.sample().squeeze()
+                action_c = dist.sample().clamp(AC_EPS, 1.0 - AC_EPS).squeeze()
             else:
-                action = logits.argmax(dim=-1).squeeze()
+                action_d = logits.argmax(dim=-1).squeeze()
+                action_c = (alpha / (alpha + beta)).clamp(AC_EPS, 1.0 - AC_EPS).squeeze()
         if grad_enabled:
-            return action
-        return action.cpu()
+            return action_d, action_c
+        return action_d.cpu(), action_c.cpu()
 
-    def store(self, state, action, reward, done):
-        self.buffer.store(state, action, reward, done)
+    def store(self, state, action_d, action_c, reward, done, valid_mask=None):
+        self.buffer.store(state, action_d, action_c, reward, done, valid_mask=valid_mask)
 
     def init_optimizer(self, lr, optim="AdamW"):
         opt_cls    = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
@@ -385,16 +327,17 @@ class AACAgent:
     def compute_advantages(
         self,
         last_next_state: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        states, actions, rewards, dones = self.buffer.to_tensors(self.device, self.dtype)
-        actions = actions.squeeze(-1) if actions.dim() > 1 else actions
-        rewards = rewards.squeeze(-1) if rewards.dim() > 1 else rewards
-        dones   = dones.squeeze(-1)   if dones.dim()   > 1 else dones
+    ):
+        states, actions_d, actions_c, rewards, dones, valid_masks = self.buffer.to_tensors(self.device, self.dtype)
+        actions_d = actions_d.squeeze(-1) if actions_d.dim() > 1 else actions_d
+        actions_c = actions_c.squeeze(-1) if actions_c.dim() > 1 else actions_c
+        rewards   = rewards  .squeeze(-1) if rewards  .dim() > 1 else rewards
+        dones     = dones    .squeeze(-1) if dones    .dim() > 1 else dones
 
         with torch.no_grad():
             last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
             all_states = torch.cat([states, last_next_state[None]], dim=0)
-            _, values_all = self.net(all_states)   # (T+1, [B,])
+            _, _, _, values_all = self.net(all_states)       # (T+1, [B,])
 
             v_t   = values_all[:-1]
             v_tp1 = values_all[1:]
@@ -409,7 +352,7 @@ class AACAgent:
             if self.normalize_advantages:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
 
-        return advantages, raw_adv, returns, states, actions
+        return advantages, raw_adv, returns, states, actions_d, actions_c, valid_masks
 
     def update(
         self,
@@ -423,13 +366,16 @@ class AACAgent:
             return _empty_update_metrics()
 
         metrics = _init_update_metrics()
-        advantages, raw_adv, returns, states, actions = self.compute_advantages(last_next_state)
+        advantages, raw_adv, returns, states, actions_d, actions_c, valid_masks = self.compute_advantages(last_next_state)
 
         for _ in range(k_epochs):
-            logits, values = self.net(states)
-            dist      = distributions.Categorical(logits=logits)
-            log_probs = dist.log_prob(actions.long())
-            entropy   = dist.entropy().mean()
+            logits, alpha, beta, values = self.net(states)
+            cat, beta_dist = _build_hybrid_dist(logits, alpha, beta, valid_mask=valid_masks)
+
+            log_probs = _hybrid_log_prob(cat, beta_dist, actions_d, actions_c)
+            entropy, entropy_d, entropy_c, entropy_c_weighted = _hybrid_entropy_components(
+                cat, beta_dist, valid_masks
+            )
 
             adv              = advantages.detach()
             policy_objective = (log_probs * adv).mean()
@@ -446,12 +392,17 @@ class AACAgent:
                 metrics,
                 logits=logits,
                 log_probs=log_probs,
+                alpha=alpha,
+                beta=beta,
                 values=values,
                 returns=returns,
                 raw_advantages=raw_adv,
                 policy_objective=policy_objective,
                 value_loss=value_loss,
                 entropy=entropy,
+                entropy_discrete=entropy_d,
+                entropy_continuous=entropy_c,
+                entropy_continuous_weighted=entropy_c_weighted,
                 loss=loss,
             )
 
@@ -463,6 +414,10 @@ class AACAgent:
     def load(self, path: str, strict: bool = True):
         ckpt = torch.load(path, map_location=self.device)
         self.net.load_state_dict(ckpt["network"], strict=strict)
+
+    # -------------------------------------------------------------------------
+    # Training loops — env.step(...) receives the tuple (action_d, action_c)
+    # -------------------------------------------------------------------------
 
     def train_on_historical(
         self,
@@ -487,8 +442,9 @@ class AACAgent:
         total_info   = []
 
         for episode in range(1, n_episodes + 1):
-            start = torch.randint(len(data) - max_steps, size=[1]).item()
-            state = env.reset(data[start])
+            start  = torch.randint(len(data) - max_steps, size=[1]).item()
+            sim_t0 = float(data[start]["time"])
+            state  = env.reset(data[start])
             self.buffer.clear()
 
             if store_results:
@@ -498,8 +454,11 @@ class AACAgent:
 
             step = 1
             while True:
+                valid_mask = env.valid_action_mask() if step > warm_up else None
+
                 if step > warm_up:
-                    action = self.act(state.to_tensor(), explore=True, grad_enabled=False)
+                    action_d, action_c = self.act(state.to_tensor(), valid_mask=valid_mask, explore=True, grad_enabled=False)
+                    action = (action_d, action_c)
                 else:
                     action = None
 
@@ -510,11 +469,14 @@ class AACAgent:
                     episode_info.append(info)
 
                 if step > warm_up:
+                    env_dtype = env.dtype if hasattr(env, "dtype") else torch.float32
                     self.store(
                         state.to_tensor().detach(),
-                        action.detach(),
-                        torch.tensor(reward, dtype=env.dtype if hasattr(env, "dtype") else torch.float32),
-                        torch.tensor(done,   dtype=env.dtype if hasattr(env, "dtype") else torch.float32),
+                        action_d.detach(),
+                        action_c.detach().to(dtype=env_dtype),
+                        torch.tensor(reward, dtype=env_dtype),
+                        torch.tensor(done,   dtype=env_dtype),
+                        valid_mask=valid_mask,
                     )
 
                     rollout_ready = len(self.buffer) >= update_interval
@@ -530,7 +492,7 @@ class AACAgent:
                         if store_results:
                             episode_loss.append(loss_dict)
 
-                        msg = f"episode {episode} [{100*step/max_steps:.1f}%] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
+                        msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
                         for key, val in loss_dict.items():
                             msg += f" - {key}: {sum(val) / len(val):.5f}"
                         print(msg, end="\r")
@@ -539,7 +501,7 @@ class AACAgent:
                         break
                 else:
                     if step % update_interval == 1:
-                        print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
+                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - warm up in progress...", end="\r")
 
                 state = next_state
                 step += 1
@@ -549,7 +511,7 @@ class AACAgent:
                 total_reward.append(episode_reward)
                 total_info.append(episode_info)
 
-            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
+            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
             if store_results and len(episode_loss) > 0:
                 keys = episode_loss[0].keys()
                 for key in keys:
@@ -586,6 +548,7 @@ class AACAgent:
 
         for episode in range(1, n_episodes + 1):
             starts = [torch.randint(data_len - max_steps, size=[1]).item() for _ in range(N)]
+            sim_t0 = float(data[starts[0]]["time"])
             obs, _ = vec_env.reset([data[starts[i]] for i in range(N)])
             self.buffer.clear()
 
@@ -596,8 +559,11 @@ class AACAgent:
 
             step = 1
             while step <= max_steps:
+                valid_mask = vec_env.valid_action_mask() if step > warm_up else None
+
                 if step > warm_up:
-                    actions = self.act(obs, explore=True, grad_enabled=False)
+                    actions_d, actions_c = self.act(obs, valid_mask=valid_mask, explore=True, grad_enabled=False)
+                    actions = (actions_d, actions_c)
                 else:
                     actions = None
 
@@ -618,9 +584,11 @@ class AACAgent:
                 if step > warm_up:
                     self.buffer.store(
                         obs.detach(),
-                        actions.detach(),
+                        actions_d.detach(),
+                        actions_c.detach().to(dtype=dtype),
                         rewards.to(dtype=dtype),
                         dones.to(dtype=dtype),
+                        valid_mask=valid_mask,
                     )
 
                     rollout_ready = len(self.buffer) >= update_interval
@@ -635,7 +603,7 @@ class AACAgent:
                         if store_results:
                             ep_loss.append(loss_dict)
 
-                        msg = f"episode {episode} [{100*step/max_steps:.1f}%] - avg. reward: {rewards.mean():.5f}"
+                        msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[starts[0] + step]['time']) - sim_t0)}] - avg. reward: {rewards.mean():.5f}"
                         if store_results:
                             msg += f" - avg. portfolio: {sum(infos[i]['V'] for i in range(N)) / N:.2f}"
                         for key, val in loss_dict.items():
@@ -648,7 +616,7 @@ class AACAgent:
                     if terminal:
                         break
                     if step % update_interval == 1:
-                        print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
+                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[starts[0] + step]['time']) - sim_t0)}] - warm up in progress...", end="\r")
 
                 obs  = next_obs
                 step += 1
@@ -659,7 +627,7 @@ class AACAgent:
                 total_info.append(ep_info)
 
             all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
-            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f}"
+            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[starts[0] + step]['time']) - sim_t0)}] - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f}"
             if store_results:
                 msg += f" - avg. portfolio: {sum(infos[i]['V'] for i in range(N)) / N:.2f}"
             if store_results and len(ep_loss) > 0:
@@ -697,6 +665,7 @@ class AACAgent:
 
         for episode in range(1, n_episodes + 1):
             starts = torch.randint(T - max_steps, (B,))
+            sim_t0 = float(times[starts[0]])
             obs    = bat_env.reset(
                 close[starts], high[starts], low[starts], volume[starts], times[starts],
             )
@@ -709,19 +678,21 @@ class AACAgent:
             step = 1
             while step <= max_steps:
                 si = starts + step
+                valid_mask = bat_env.valid_action_mask() if step > warm_up else None
 
                 if step > warm_up:
-                    actions      = self.act(obs, explore=True, grad_enabled=False)
-                    step_actions = actions
+                    actions_d, actions_c = self.act(obs, valid_mask=valid_mask, explore=True, grad_enabled=False)
+                    step_actions = (actions_d, actions_c)
                 else:
-                    actions      = None
-                    step_actions = torch.zeros(B, dtype=torch.long)
+                    actions_d    = None
+                    actions_c    = None
+                    step_actions = (torch.zeros(B, dtype=torch.long), torch.zeros(B, dtype=dtype))
 
                 next_obs, rewards, dones = bat_env.step(
                     step_actions, close[si], high[si], low[si], volume[si], times[si],
                 )
 
-                if store_results and actions is not None:
+                if store_results and actions_d is not None:
                     for i in range(B):
                         ep_reward[i].append(float(rewards[i]))
 
@@ -730,9 +701,11 @@ class AACAgent:
                 if step > warm_up:
                     self.buffer.store(
                         obs.detach(),
-                        actions.detach(),
+                        actions_d.detach(),
+                        actions_c.detach().to(dtype=dtype),
                         rewards.to(dtype=dtype),
                         dones.to(dtype=dtype),
+                        valid_mask=valid_mask,
                     )
 
                     rollout_ready = len(self.buffer) >= update_interval
@@ -748,7 +721,7 @@ class AACAgent:
                             ep_loss.append(loss_dict)
 
                         msg = (
-                            f"episode {episode} [{100*step/max_steps:.1f}%]"
+                            f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}]"
                             f" - avg. reward: {rewards.mean():.5f}"
                             f" - avg. portfolio: {bat_env.V.mean():.2f}"
                         )
@@ -762,7 +735,7 @@ class AACAgent:
                     if terminal:
                         break
                     if step % update_interval == 1:
-                        print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
+                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}] - warm up in progress...", end="\r")
 
                 obs  = next_obs
                 step += 1
@@ -772,7 +745,7 @@ class AACAgent:
                 total_reward.append(ep_reward)
 
             all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
-            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f} - avg. portfolio: {bat_env.V.mean():.2f}"
+            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}] - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f} - avg. portfolio: {bat_env.V.mean():.2f}"
             if store_results and len(ep_loss) > 0:
                 keys = ep_loss[0].keys()
                 for key in keys:
@@ -783,17 +756,17 @@ class AACAgent:
 
 
 # ---------------------------------------------------------------------------
-# RecurrentAACAgent — recurrent
+# RecurrentHybridAACAgent — recurrent
 # ---------------------------------------------------------------------------
 
 class RecurrentAACAgent:
     """
-    Recurrent Advantage Actor-Critic.
+    Recurrent Hybrid Advantage Actor-Critic.
 
-    Identical to AACAgent but uses a RecurrentActionValueNetwork so the policy
-    and value estimate are conditioned on the full history via a learned hidden
-    state.  The update replays each buffered segment from a saved hidden state
-    h0, exactly as in RecurrentVAQAgent.
+    Identical to AACAgent but uses a RecurrentHybridActionValueNetwork so the
+    policy and value estimate are conditioned on the full history via a learned
+    hidden state. The update replays each buffered segment from a saved hidden
+    state h0, matching the pattern used by the discrete recurrent AAC agent.
 
     `burn_in_updates` skips the first N gradient updates after warm-up so the
     recurrent state can move away from its reset state before training begins.
@@ -811,6 +784,7 @@ class RecurrentAACAgent:
         gae_lambda: float = 0.95,
         hidden_dims: list[int] = None,
         hidden_dims_actor: list[int] = None,
+        hidden_dims_actor_c: list[int] = None,
         hidden_dims_value: list[int] = None,
         activation: callable = torch.tanh,
         recurrent_type: str = "simple",
@@ -831,11 +805,12 @@ class RecurrentAACAgent:
         self.state_dim            = state_dim
         self.action_dim           = action_dim
 
-        self.net = RecurrentActionValueNetwork(
+        self.net = RecurrentHybridActionValueNetwork(
             state_dim=state_dim,
             action_dim=action_dim,
             hidden_dims=hidden_dims,
             hidden_dims_actor=hidden_dims_actor,
+            hidden_dims_actor_c=hidden_dims_actor_c,
             hidden_dims_value=hidden_dims_value,
             activation=activation,
             recurrent_type=recurrent_type,
@@ -845,15 +820,15 @@ class RecurrentAACAgent:
         self.buffer = RolloutBuffer()
         self.net.reset(1)
 
-    def infer_logits(self, state: torch.Tensor) -> torch.Tensor:
-        logits, _ = self.net(state)
-        return logits
+    def infer_heads(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        logits, alpha, beta, _ = self.net(state)
+        return logits, alpha, beta
 
     def infer_from_seq(
         self,
         state_seq: torch.Tensor,
         h0: dict | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ):
         if h0 is not None:
             self.net.set_states(h0, strict=False)
         return self.net.forward_seq(state_seq)
@@ -861,22 +836,29 @@ class RecurrentAACAgent:
     def act(
         self,
         state: torch.Tensor,
+        valid_mask: torch.BoolTensor | None = None,
         explore: bool = False,
         grad_enabled: bool = False,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         with torch.set_grad_enabled(grad_enabled):
-            state  = state.to(dtype=self.dtype, device=self.device)
-            logits = self.infer_logits(state)
+            state = state.to(dtype=self.dtype, device=self.device)
+            logits, alpha, beta = self.infer_heads(state)
+            if valid_mask is not None:
+                logits = apply_action_mask(logits, valid_mask.to(self.device))
+            cat  = distributions.Categorical(logits=logits)
+            dist = distributions.Beta(alpha, beta)
             if explore:
-                action = distributions.Categorical(logits=logits).sample().squeeze()
+                action_d = cat.sample().squeeze()
+                action_c = dist.sample().clamp(AC_EPS, 1.0 - AC_EPS).squeeze()
             else:
-                action = logits.argmax(dim=-1).squeeze()
+                action_d = logits.argmax(dim=-1).squeeze()
+                action_c = (alpha / (alpha + beta)).clamp(AC_EPS, 1.0 - AC_EPS).squeeze()
         if grad_enabled:
-            return action
-        return action.cpu()
+            return action_d, action_c
+        return action_d.cpu(), action_c.cpu()
 
-    def store(self, state, action, reward, done):
-        self.buffer.store(state, action, reward, done)
+    def store(self, state, action_d, action_c, reward, done, valid_mask=None):
+        self.buffer.store(state, action_d, action_c, reward, done, valid_mask=valid_mask)
 
     def init_optimizer(self, lr, optim="AdamW"):
         opt_cls    = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
@@ -886,11 +868,12 @@ class RecurrentAACAgent:
         self,
         last_next_state: torch.Tensor,
         h0: dict | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        states, actions, rewards, dones = self.buffer.to_tensors(self.device, self.dtype)
-        actions = actions.squeeze(-1) if actions.dim() > 1 else actions
-        rewards = rewards.squeeze(-1) if rewards.dim() > 1 else rewards
-        dones   = dones.squeeze(-1)   if dones.dim()   > 1 else dones
+    ):
+        states, actions_d, actions_c, rewards, dones, valid_masks = self.buffer.to_tensors(self.device, self.dtype)
+        actions_d = actions_d.squeeze(-1) if actions_d.dim() > 1 else actions_d
+        actions_c = actions_c.squeeze(-1) if actions_c.dim() > 1 else actions_c
+        rewards   = rewards  .squeeze(-1) if rewards  .dim() > 1 else rewards
+        dones     = dones    .squeeze(-1) if dones    .dim() > 1 else dones
 
         last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
 
@@ -898,7 +881,7 @@ class RecurrentAACAgent:
             if h0 is not None:
                 self.net.set_states(h0, strict=False)
             all_states = torch.cat([states, last_next_state[None]], dim=0)
-            _, values_all = self.net.forward_seq(all_states)  # (T+1, [B,])
+            _, _, _, values_all = self.net.forward_seq(all_states)
 
             v_t   = values_all[:-1]
             v_tp1 = values_all[1:]
@@ -913,7 +896,7 @@ class RecurrentAACAgent:
             if self.normalize_advantages:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
 
-        return advantages, raw_adv, returns, states, actions
+        return advantages, raw_adv, returns, states, actions_d, actions_c, valid_masks
 
     def update(
         self,
@@ -928,13 +911,16 @@ class RecurrentAACAgent:
             return _empty_update_metrics()
 
         metrics = _init_update_metrics()
-        advantages, raw_adv, returns, states, actions = self.compute_advantages(last_next_state, h0=h0)
+        advantages, raw_adv, returns, states, actions_d, actions_c, valid_masks = self.compute_advantages(last_next_state, h0=h0)
 
         for _ in range(k_epochs):
-            logits, values = self.infer_from_seq(states, h0=h0)
-            dist      = distributions.Categorical(logits=logits)
-            log_probs = dist.log_prob(actions.long())
-            entropy   = dist.entropy().mean()
+            logits, alpha, beta, values = self.infer_from_seq(states, h0=h0)
+            cat, beta_dist = _build_hybrid_dist(logits, alpha, beta, valid_mask=valid_masks)
+
+            log_probs = _hybrid_log_prob(cat, beta_dist, actions_d, actions_c)
+            entropy, entropy_d, entropy_c, entropy_c_weighted = _hybrid_entropy_components(
+                cat, beta_dist, valid_masks
+            )
 
             adv              = advantages.detach()
             policy_objective = (log_probs * adv).mean()
@@ -951,12 +937,17 @@ class RecurrentAACAgent:
                 metrics,
                 logits=logits,
                 log_probs=log_probs,
+                alpha=alpha,
+                beta=beta,
                 values=values,
                 returns=returns,
                 raw_advantages=raw_adv,
                 policy_objective=policy_objective,
                 value_loss=value_loss,
                 entropy=entropy,
+                entropy_discrete=entropy_d,
+                entropy_continuous=entropy_c,
+                entropy_continuous_weighted=entropy_c_weighted,
                 loss=loss,
             )
 
@@ -994,6 +985,7 @@ class RecurrentAACAgent:
 
         for episode in range(1, n_episodes + 1):
             start   = torch.randint(len(data) - max_steps, size=[1]).item()
+            sim_t0  = float(data[start]["time"])
             state   = env.reset(data[start])
             burn_in = burn_in_updates
             self.net.reset()
@@ -1007,8 +999,11 @@ class RecurrentAACAgent:
 
             step = 1
             while True:
+                valid_mask = env.valid_action_mask() if step > warm_up else None
+
                 if step > warm_up:
-                    action = self.act(state.to_tensor(), explore=True, grad_enabled=False)
+                    action_d, action_c = self.act(state.to_tensor(), valid_mask=valid_mask, explore=True, grad_enabled=False)
+                    action = (action_d, action_c)
                 else:
                     action = None
 
@@ -1019,11 +1014,14 @@ class RecurrentAACAgent:
                     episode_info.append(info)
 
                 if step > warm_up:
+                    env_dtype = env.dtype if hasattr(env, "dtype") else torch.float32
                     self.store(
                         state.to_tensor().detach(),
-                        action.detach(),
-                        torch.tensor(reward, dtype=env.dtype if hasattr(env, "dtype") else torch.float32),
-                        torch.tensor(done,   dtype=env.dtype if hasattr(env, "dtype") else torch.float32),
+                        action_d.detach(),
+                        action_c.detach().to(dtype=env_dtype),
+                        torch.tensor(reward, dtype=env_dtype),
+                        torch.tensor(done,   dtype=env_dtype),
+                        valid_mask=valid_mask,
                     )
 
                     rollout_ready = len(self.buffer) >= update_interval
@@ -1044,7 +1042,7 @@ class RecurrentAACAgent:
                             if store_results:
                                 episode_loss.append(loss_dict)
 
-                            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
+                            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
                             for key, val in loss_dict.items():
                                 msg += f" - {key}: {sum(val) / len(val):.5f}"
                             print(msg, end="\r")
@@ -1056,7 +1054,7 @@ class RecurrentAACAgent:
                         break
                 else:
                     if step % update_interval == 1:
-                        print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
+                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - warm up in progress...", end="\r")
 
                 state = next_state
                 step += 1
@@ -1066,7 +1064,7 @@ class RecurrentAACAgent:
                 total_reward.append(episode_reward)
                 total_info.append(episode_info)
 
-            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
+            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
             if store_results and len(episode_loss) > 0:
                 keys = episode_loss[0].keys()
                 for key in keys:
@@ -1108,6 +1106,7 @@ class RecurrentAACAgent:
             burn_in = burn_in_updates
 
             starts = [torch.randint(data_len - max_steps, size=[1]).item() for _ in range(N)]
+            sim_t0 = float(data[starts[0]]["time"])
             obs, _ = vec_env.reset([data[starts[i]] for i in range(N)])
             self.buffer.clear()
 
@@ -1118,8 +1117,11 @@ class RecurrentAACAgent:
 
             step = 1
             while step <= max_steps:
+                valid_mask = vec_env.valid_action_mask() if step > warm_up else None
+
                 if step > warm_up:
-                    actions = self.act(obs, explore=True, grad_enabled=False)
+                    actions_d, actions_c = self.act(obs, valid_mask=valid_mask, explore=True, grad_enabled=False)
+                    actions = (actions_d, actions_c)
                 else:
                     actions = None
 
@@ -1140,9 +1142,11 @@ class RecurrentAACAgent:
                 if step > warm_up:
                     self.buffer.store(
                         obs.detach(),
-                        actions.detach(),
+                        actions_d.detach(),
+                        actions_c.detach().to(dtype=dtype),
                         rewards.to(dtype=dtype),
                         dones.to(dtype=dtype),
+                        valid_mask=valid_mask,
                     )
 
                     rollout_ready = len(self.buffer) >= update_interval
@@ -1162,7 +1166,7 @@ class RecurrentAACAgent:
                             if store_results:
                                 ep_loss.append(loss_dict)
 
-                            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - avg. reward: {rewards.mean():.5f}"
+                            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[starts[0] + step]['time']) - sim_t0)}] - avg. reward: {rewards.mean():.5f}"
                             if store_results:
                                 msg += f" - avg. portfolio: {sum(infos[i]['V'] for i in range(N)) / N:.2f}"
                             for key, val in loss_dict.items():
@@ -1178,7 +1182,7 @@ class RecurrentAACAgent:
                     if terminal:
                         break
                     if step % update_interval == 1:
-                        print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
+                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[starts[0] + step]['time']) - sim_t0)}] - warm up in progress...", end="\r")
 
                 obs  = next_obs
                 step += 1
@@ -1189,7 +1193,7 @@ class RecurrentAACAgent:
                 total_info.append(ep_info)
 
             all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
-            msg = f"episode {episode} [{100*step/max_steps:.1f}%] - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f}"
+            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[starts[0] + step]['time']) - sim_t0)}] - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f}"
             if store_results:
                 msg += f" - avg. portfolio: {sum(infos[i]['V'] for i in range(N)) / N:.2f}"
             if store_results and len(ep_loss) > 0:
@@ -1216,22 +1220,6 @@ class RecurrentAACAgent:
         store_results=True,
         max_grad_norm=None,
     ):
-        """
-        Train on a BatchedMultiCurrencyEnv using pre-stacked tensor data.
-
-        close, high, low, volume : (T, N) float tensors
-        times                    : (T,)  float64 tensor of Unix timestamps
-
-        Each episode picks B independent random start offsets. All B
-        environments step together — market data indexed as data[starts + step].
-        The buffer stores (B, ...) tensors per step; a single update() call
-        averages gradients over both the time and batch dimensions.
-
-        `burn_in_updates` skips the first N gradient updates after warm-up so
-        the shared recurrent state can stabilise before training begins.
-
-        Returns (total_loss, total_reward).
-        """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
@@ -1248,6 +1236,7 @@ class RecurrentAACAgent:
             burn_in = burn_in_updates
 
             starts = torch.randint(T - max_steps, (B,))
+            sim_t0 = float(times[starts[0]])
             obs    = bat_env.reset(
                 close[starts], high[starts], low[starts], volume[starts], times[starts],
             )
@@ -1260,19 +1249,21 @@ class RecurrentAACAgent:
             step = 1
             while step <= max_steps:
                 si = starts + step
+                valid_mask = bat_env.valid_action_mask() if step > warm_up else None
 
                 if step > warm_up:
-                    actions      = self.act(obs, explore=True, grad_enabled=False)
-                    step_actions = actions
+                    actions_d, actions_c = self.act(obs, valid_mask=valid_mask, explore=True, grad_enabled=False)
+                    step_actions = (actions_d, actions_c)
                 else:
-                    actions      = None
-                    step_actions = torch.zeros(B, dtype=torch.long)
+                    actions_d    = None
+                    actions_c    = None
+                    step_actions = (torch.zeros(B, dtype=torch.long), torch.zeros(B, dtype=dtype))
 
                 next_obs, rewards, dones = bat_env.step(
                     step_actions, close[si], high[si], low[si], volume[si], times[si],
                 )
 
-                if store_results and actions is not None:
+                if store_results and actions_d is not None:
                     for i in range(B):
                         ep_reward[i].append(float(rewards[i]))
 
@@ -1281,9 +1272,11 @@ class RecurrentAACAgent:
                 if step > warm_up:
                     self.buffer.store(
                         obs.detach(),
-                        actions.detach(),
+                        actions_d.detach(),
+                        actions_c.detach().to(dtype=dtype),
                         rewards.to(dtype=dtype),
                         dones.to(dtype=dtype),
+                        valid_mask=valid_mask,
                     )
 
                     rollout_ready = len(self.buffer) >= update_interval
@@ -1304,7 +1297,7 @@ class RecurrentAACAgent:
                                 ep_loss.append(loss_dict)
 
                             msg = (
-                                f"episode {episode} [{100*step/max_steps:.1f}%]"
+                                f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}]"
                                 f" - avg. reward: {rewards.mean():.5f}"
                                 f" - avg. portfolio: {bat_env.V.mean():.2f}"
                             )
@@ -1321,7 +1314,7 @@ class RecurrentAACAgent:
                     if terminal:
                         break
                     if step % update_interval == 1:
-                        print(f"episode {episode} [{100*step/max_steps:.1f}%] - warm up in progress...", end="\r")
+                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}] - warm up in progress...", end="\r")
 
                 obs  = next_obs
                 step += 1
@@ -1332,7 +1325,7 @@ class RecurrentAACAgent:
 
             all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
             msg = (
-                f"episode {episode} [{100*step/max_steps:.1f}%]"
+                f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}]"
                 f" - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f}"
                 f" - avg. portfolio: {bat_env.V.mean():.2f}"
             )
