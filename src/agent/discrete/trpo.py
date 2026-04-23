@@ -241,7 +241,7 @@ class _TRPOMixin:
         return list(params)
 
     def _value_parameters(self) -> list[torch.nn.Parameter]:
-        return list(self.net.v_head.parameters())
+        return list(self.net.value.parameters())
 
     def init_optimizer(self, lr, optim="AdamW"):
         opt_cls = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam

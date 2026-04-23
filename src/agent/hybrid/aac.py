@@ -6,6 +6,7 @@ from src.agent.discrete.aac import (
     _compute_gae,
     _explained_variance,
     _fmt_sim_elapsed,
+    _sample_start_indices,
 )
 from src.agent.hybrid.network import (
     HybridActionValueNetwork,
@@ -355,7 +356,6 @@ class AACAgent:
     def update(
         self,
         last_next_state: torch.Tensor,
-        k_epochs: int = 1,
         max_grad_norm: float | None = None,
     ) -> dict[str, list[float]]:
         if not hasattr(self, "optim") or self.optim is None:
@@ -366,43 +366,42 @@ class AACAgent:
         metrics = _init_update_metrics()
         advantages, raw_adv, returns, states, actions_d, actions_c, valid_masks = self.compute_advantages(last_next_state)
 
-        for _ in range(k_epochs):
-            logits, alpha, beta, values = self.net(states)
-            cat, beta_dist = _build_hybrid_dist(logits, alpha, beta, valid_mask=valid_masks)
+        logits, alpha, beta, values = self.net(states)
+        cat, beta_dist = _build_hybrid_dist(logits, alpha, beta, valid_mask=valid_masks)
 
-            log_probs = _hybrid_log_prob(cat, beta_dist, actions_d, actions_c)
-            entropy, entropy_d, entropy_c, entropy_c_weighted = _hybrid_entropy_components(
-                cat, beta_dist, valid_masks
-            )
+        log_probs = _hybrid_log_prob(cat, beta_dist, actions_d, actions_c)
+        entropy, entropy_d, entropy_c, entropy_c_weighted = _hybrid_entropy_components(
+            cat, beta_dist, valid_masks
+        )
 
-            adv              = advantages.detach()
-            policy_objective = (log_probs * adv).mean()
-            value_loss       = 0.5 * (returns.detach() - values).pow(2).mean()
-            loss             = -policy_objective + self.vf_coef * value_loss - self.ent_coef * entropy
+        adv              = advantages.detach()
+        policy_objective = (log_probs * adv).mean()
+        value_loss       = 0.5 * (returns.detach() - values).pow(2).mean()
+        loss             = -policy_objective + self.vf_coef * value_loss - self.ent_coef * entropy
 
-            self.optim.zero_grad(set_to_none=True)
-            loss.backward()
-            if max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_grad_norm)
-            self.optim.step()
+        self.optim.zero_grad(set_to_none=True)
+        loss.backward()
+        if max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_grad_norm)
+        self.optim.step()
 
-            _append_update_metrics(
-                metrics,
-                logits=logits,
-                log_probs=log_probs,
-                alpha=alpha,
-                beta=beta,
-                values=values,
-                returns=returns,
-                raw_advantages=raw_adv,
-                policy_objective=policy_objective,
-                value_loss=value_loss,
-                entropy=entropy,
-                entropy_discrete=entropy_d,
-                entropy_continuous=entropy_c,
-                entropy_continuous_weighted=entropy_c_weighted,
-                loss=loss,
-            )
+        _append_update_metrics(
+            metrics,
+            logits=logits,
+            log_probs=log_probs,
+            alpha=alpha,
+            beta=beta,
+            values=values,
+            returns=returns,
+            raw_advantages=raw_adv,
+            policy_objective=policy_objective,
+            value_loss=value_loss,
+            entropy=entropy,
+            entropy_discrete=entropy_d,
+            entropy_continuous=entropy_c,
+            entropy_continuous_weighted=entropy_c_weighted,
+            loss=loss,
+        )
 
         return metrics
 
@@ -425,7 +424,6 @@ class AACAgent:
         max_steps=2000,
         warm_up=0,
         update_interval=100,
-        n_updates=1,
         lr=3e-4,
         optim="AdamW",
         init_optimizer=False,
@@ -440,7 +438,7 @@ class AACAgent:
         total_info   = []
 
         for episode in range(1, n_episodes + 1):
-            start  = torch.randint(len(data) - max_steps, size=[1]).item()
+            start  = int(_sample_start_indices(len(data), max_steps).item())
             sim_t0 = float(data[start]["time"])
             state  = env.reset(data[start])
             self.buffer.clear()
@@ -483,7 +481,6 @@ class AACAgent:
                     if (rollout_ready or terminal) and len(self.buffer) > 2:
                         loss_dict = self.update(
                             last_next_state=next_state.to_tensor(),
-                            k_epochs=n_updates,
                             max_grad_norm=max_grad_norm,
                         )
                         self.buffer.clear()
@@ -526,7 +523,6 @@ class AACAgent:
         max_steps=2000,
         warm_up=0,
         update_interval=100,
-        n_updates=1,
         lr=3e-4,
         optim="AdamW",
         init_optimizer=False,
@@ -545,7 +541,7 @@ class AACAgent:
         total_info   = []
 
         for episode in range(1, n_episodes + 1):
-            starts = [torch.randint(data_len - max_steps, size=[1]).item() for _ in range(N)]
+            starts = _sample_start_indices(data_len, max_steps, batch_size=N).tolist()
             sim_t0 = float(data[starts[0]]["time"])
             obs, _ = vec_env.reset([data[starts[i]] for i in range(N)])
             self.buffer.clear()
@@ -594,7 +590,6 @@ class AACAgent:
                     if (rollout_ready or terminal) and len(self.buffer) > 2:
                         loss_dict = self.update(
                             last_next_state=next_obs,
-                            k_epochs=n_updates,
                             max_grad_norm=max_grad_norm,
                         )
                         self.buffer.clear()
@@ -644,7 +639,6 @@ class AACAgent:
         max_steps=2000,
         warm_up=0,
         update_interval=100,
-        n_updates=1,
         lr=3e-4,
         optim="AdamW",
         init_optimizer=False,
@@ -662,7 +656,7 @@ class AACAgent:
         total_reward = []
 
         for episode in range(1, n_episodes + 1):
-            starts = torch.randint(T - max_steps, (B,))
+            starts = _sample_start_indices(T, max_steps, batch_size=B)
             sim_t0 = float(times[starts[0]])
             obs    = bat_env.reset(
                 close[starts], high[starts], low[starts], volume[starts], times[starts],
@@ -711,7 +705,6 @@ class AACAgent:
                     if (rollout_ready or terminal) and len(self.buffer) > 2:
                         loss_dict = self.update(
                             last_next_state=next_obs,
-                            k_epochs=n_updates,
                             max_grad_norm=max_grad_norm,
                         )
                         self.buffer.clear()
@@ -897,7 +890,6 @@ class RecurrentAACAgent:
     def update(
         self,
         last_next_state: torch.Tensor,
-        k_epochs: int = 1,
         h0: dict | None = None,
         max_grad_norm: float | None = None,
     ) -> dict[str, list[float]]:
@@ -909,43 +901,42 @@ class RecurrentAACAgent:
         metrics = _init_update_metrics()
         advantages, raw_adv, returns, states, actions_d, actions_c, valid_masks = self.compute_advantages(last_next_state, h0=h0)
 
-        for _ in range(k_epochs):
-            logits, alpha, beta, values = self.infer_from_seq(states, h0=h0)
-            cat, beta_dist = _build_hybrid_dist(logits, alpha, beta, valid_mask=valid_masks)
+        logits, alpha, beta, values = self.infer_from_seq(states, h0=h0)
+        cat, beta_dist = _build_hybrid_dist(logits, alpha, beta, valid_mask=valid_masks)
 
-            log_probs = _hybrid_log_prob(cat, beta_dist, actions_d, actions_c)
-            entropy, entropy_d, entropy_c, entropy_c_weighted = _hybrid_entropy_components(
-                cat, beta_dist, valid_masks
-            )
+        log_probs = _hybrid_log_prob(cat, beta_dist, actions_d, actions_c)
+        entropy, entropy_d, entropy_c, entropy_c_weighted = _hybrid_entropy_components(
+            cat, beta_dist, valid_masks
+        )
 
-            adv              = advantages.detach()
-            policy_objective = (log_probs * adv).mean()
-            value_loss       = 0.5 * (returns.detach() - values).pow(2).mean()
-            loss             = -policy_objective + self.vf_coef * value_loss - self.ent_coef * entropy
+        adv              = advantages.detach()
+        policy_objective = (log_probs * adv).mean()
+        value_loss       = 0.5 * (returns.detach() - values).pow(2).mean()
+        loss             = -policy_objective + self.vf_coef * value_loss - self.ent_coef * entropy
 
-            self.optim.zero_grad(set_to_none=True)
-            loss.backward()
-            if max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_grad_norm)
-            self.optim.step()
+        self.optim.zero_grad(set_to_none=True)
+        loss.backward()
+        if max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_grad_norm)
+        self.optim.step()
 
-            _append_update_metrics(
-                metrics,
-                logits=logits,
-                log_probs=log_probs,
-                alpha=alpha,
-                beta=beta,
-                values=values,
-                returns=returns,
-                raw_advantages=raw_adv,
-                policy_objective=policy_objective,
-                value_loss=value_loss,
-                entropy=entropy,
-                entropy_discrete=entropy_d,
-                entropy_continuous=entropy_c,
-                entropy_continuous_weighted=entropy_c_weighted,
-                loss=loss,
-            )
+        _append_update_metrics(
+            metrics,
+            logits=logits,
+            log_probs=log_probs,
+            alpha=alpha,
+            beta=beta,
+            values=values,
+            returns=returns,
+            raw_advantages=raw_adv,
+            policy_objective=policy_objective,
+            value_loss=value_loss,
+            entropy=entropy,
+            entropy_discrete=entropy_d,
+            entropy_continuous=entropy_c,
+            entropy_continuous_weighted=entropy_c_weighted,
+            loss=loss,
+        )
 
         return metrics
 
@@ -964,7 +955,6 @@ class RecurrentAACAgent:
         max_steps=2000,
         warm_up=0,
         update_interval=100,
-        n_updates=1,
         burn_in_updates=0,
         lr=3e-4,
         optim="AdamW",
@@ -980,7 +970,7 @@ class RecurrentAACAgent:
         total_info   = []
 
         for episode in range(1, n_episodes + 1):
-            start   = torch.randint(len(data) - max_steps, size=[1]).item()
+            start   = int(_sample_start_indices(len(data), max_steps).item())
             sim_t0  = float(data[start]["time"])
             state   = env.reset(data[start])
             burn_in = burn_in_updates
@@ -1031,7 +1021,6 @@ class RecurrentAACAgent:
                         else:
                             loss_dict = self.update(
                                 last_next_state=next_state.to_tensor(),
-                                k_epochs=n_updates,
                                 h0=h0,
                                 max_grad_norm=max_grad_norm,
                             )
@@ -1077,7 +1066,6 @@ class RecurrentAACAgent:
         max_steps=2000,
         warm_up=0,
         update_interval=100,
-        n_updates=1,
         burn_in_updates=0,
         lr=3e-4,
         optim="AdamW",
@@ -1101,7 +1089,7 @@ class RecurrentAACAgent:
             h0      = self.net.get_states(clone=True, detach=True)
             burn_in = burn_in_updates
 
-            starts = [torch.randint(data_len - max_steps, size=[1]).item() for _ in range(N)]
+            starts = _sample_start_indices(data_len, max_steps, batch_size=N).tolist()
             sim_t0 = float(data[starts[0]]["time"])
             obs, _ = vec_env.reset([data[starts[i]] for i in range(N)])
             self.buffer.clear()
@@ -1155,7 +1143,6 @@ class RecurrentAACAgent:
                         else:
                             loss_dict = self.update(
                                 last_next_state=next_obs,
-                                k_epochs=n_updates,
                                 h0=h0,
                                 max_grad_norm=max_grad_norm,
                             )
@@ -1208,7 +1195,6 @@ class RecurrentAACAgent:
         max_steps=2000,
         warm_up=0,
         update_interval=100,
-        n_updates=1,
         burn_in_updates=1,
         lr=3e-4,
         optim="AdamW",
@@ -1231,7 +1217,7 @@ class RecurrentAACAgent:
             h0      = self.net.get_states(clone=True, detach=True)
             burn_in = burn_in_updates
 
-            starts = torch.randint(T - max_steps, (B,))
+            starts = _sample_start_indices(T, max_steps, batch_size=B)
             sim_t0 = float(times[starts[0]])
             obs    = bat_env.reset(
                 close[starts], high[starts], low[starts], volume[starts], times[starts],
@@ -1285,7 +1271,6 @@ class RecurrentAACAgent:
                         else:
                             loss_dict = self.update(
                                 last_next_state=next_obs,
-                                k_epochs=n_updates,
                                 h0=h0,
                                 max_grad_norm=max_grad_norm,
                             )

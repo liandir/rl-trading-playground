@@ -2,15 +2,15 @@ from typing import Tuple
 
 import torch
 
-from src.environment.hybrid.longshort import (
-    BatchedMultiCurrencyEnv as _BatchedHybridLongShortEnv,
-    MultiCurrencyEnv as _HybridLongShortEnv,
+from src.environment.generic.longshort import (
+    BatchedMultiCurrencyEnv,
+    MultiCurrencyEnv,
     State,
     StateHistory,
 )
 
 
-class LongShortEnv(_HybridLongShortEnv):
+class LongShortEnv(MultiCurrencyEnv):
     """
     Discrete bucketized long/short trading environment.
 
@@ -251,7 +251,7 @@ class LongShortEnv(_HybridLongShortEnv):
         return action_info, did
 
 
-class BatchedLongShortEnv(_BatchedHybridLongShortEnv):
+class BatchedLongShortEnv(BatchedMultiCurrencyEnv):
     """
     Fully batched bucketized long/short environment.
 

@@ -43,7 +43,7 @@ class HybridActionValueNetwork(torch.nn.Module):
             prev = h
 
         self.actor = VanillaNetwork(prev, self.actor_out_dim, hidden_dims=hidden_dims_actor, activation=activation)
-        self.v_head = VanillaNetwork(prev, 1, hidden_dims=hidden_dims_value, activation=activation)
+        self.value = VanillaNetwork(prev, 1, hidden_dims=hidden_dims_value, activation=activation)
 
     def forward(self, x):
         shape = x.shape  # (..., state_dim)
@@ -54,7 +54,7 @@ class HybridActionValueNetwork(torch.nn.Module):
         logits = actor_out[..., :self.action_dim]
         ab = actor_out[..., self.action_dim:]
         alpha, beta = _split_alpha_beta(ab)
-        values = self.v_head(z).squeeze(-1).view(*shape[:-1])
+        values = self.value(z).squeeze(-1).view(*shape[:-1])
         return logits, alpha, beta, values
 
 
@@ -98,7 +98,7 @@ class RecurrentHybridActionValueNetwork(torch.nn.Module):
             recurrent_type=recurrent_type,
             recurrent_kwargs=self.recurrent_kwargs,
         )
-        self.v_head = RecurrentNetwork(
+        self.value = RecurrentNetwork(
             prev,
             1,
             hidden_dims=hidden_dims_value,
@@ -113,7 +113,7 @@ class RecurrentHybridActionValueNetwork(torch.nn.Module):
         for layer in self.layers:
             layer.reset(batch_size, device=device, dtype=dtype)
         self.actor.reset(batch_size, device=device, dtype=dtype)
-        self.v_head.reset(batch_size, device=device, dtype=dtype)
+        self.value.reset(batch_size, device=device, dtype=dtype)
 
     def forward(self, x):
         z = x.reshape(-1, self.state_dim)
@@ -123,7 +123,7 @@ class RecurrentHybridActionValueNetwork(torch.nn.Module):
         logits = actor_out[..., :self.action_dim]
         ab = actor_out[..., self.action_dim:]
         alpha, beta = _split_alpha_beta(ab)
-        values = self.v_head(z).view(-1)
+        values = self.value(z).view(-1)
         return logits, alpha, beta, values
 
     def forward_seq(self, x_seq):
@@ -134,14 +134,14 @@ class RecurrentHybridActionValueNetwork(torch.nn.Module):
         logits = actor_out[..., :self.action_dim]
         ab = actor_out[..., self.action_dim:]
         alpha, beta = _split_alpha_beta(ab)
-        values = self.v_head.forward_seq(z_seq).squeeze(-1)  # (T, [B,])
+        values = self.value.forward_seq(z_seq).squeeze(-1)  # (T, [B,])
         return logits, alpha, beta, values
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
         trunk = [cell.get_state(clone=clone, detach=detach) for cell in self.layers]
         actor = self.actor.get_states(clone=clone, detach=detach)
-        v_head = self.v_head.get_states(clone=clone, detach=detach)
-        return {"trunk": trunk, "actor": actor, "v": v_head}
+        value = self.value.get_states(clone=clone, detach=detach)
+        return {"trunk": trunk, "actor": actor, "v": value}
 
     def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
         if strict:
@@ -160,7 +160,7 @@ class RecurrentHybridActionValueNetwork(torch.nn.Module):
             cell.set_state(state, clone=clone, detach=detach)
 
         self.actor.set_states(actor_states, clone=clone, detach=detach, strict=strict)
-        self.v_head.set_states(v_states, clone=clone, detach=detach, strict=strict)
+        self.value.set_states(v_states, clone=clone, detach=detach, strict=strict)
 
 
 __all__ = [
