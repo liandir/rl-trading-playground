@@ -289,6 +289,21 @@ class RecurrentActionQNetwork(torch.nn.Module):
         self.q_head.set_states(q_states, clone=clone, detach=detach, strict=strict)
 
 
+class _ResidualAttentionBlock(torch.nn.Module):
+    """Self-attention block with residual connection and optional LayerNorm."""
+
+    def __init__(self, d_model: int, num_heads: int, use_layer_norm: bool):
+        super().__init__()
+        if num_heads <= 1:
+            self.attention = CrossAttention(d_model)
+        else:
+            self.attention = MultiHeadCrossAttention(d_model, num_heads=num_heads)
+        self.ln = torch.nn.LayerNorm(d_model) if use_layer_norm else torch.nn.Identity()
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        return self.ln(tokens + self.attention(tokens, tokens))
+
+
 class AttentionMemoryActionValueNetwork(torch.nn.Module):
     """
     Per-asset action-value network for multi-asset discrete action spaces.
@@ -306,11 +321,15 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
                                  v
                per-asset MLP shared across N  →  (N, d_model)
                                  │
+                                 + concat learned asset embedding
                                  v
-               self-attention across N tokens
-               (optional LayerNorm + residual)  →  tokens (N, d_model)
+                         (N, d_model + d_asset_emb)
                                  │
-                   optional mean-pool / concat over N
+                                 v
+               residual self-attention stack × n_att_layers
+               (optional LayerNorm)  →  tokens (N, d_model + d_asset_emb)
+                                 │
+                           flatten over N
                                  │
              ┌───────────────────┴───────────────────┐
              v                                       v
@@ -337,8 +356,7 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
 
     * ``"pooled"`` (default): a single MLP maps the global trunk ``h`` to
       ``action_dim`` logits. Per-asset identity must be reconstructed from
-      output position alone — works, but information-lossy when the global
-      trunk was mean-pooled.
+      output position alone.
     * ``"per_asset"``: a shared per-asset MLP maps each post-attention token
       (concatenated with ``h`` broadcast) to ``n_directions·K`` logits, and a
       tiny global head emits the single idle logit. Outputs are scattered to
@@ -362,10 +380,11 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         d_global: int,
         action_dim: int,
         d_model: int = 64,
+        asset_embed_dim: int | None = None,
         hidden_dims_asset=None,
         num_heads: int = 1,
+        n_att_layers: int = 1,
         use_layer_norm: bool = False,
-        use_mean_pool: bool = True,
         d_mem: int = 64,
         d_ff: int = 64,
         hidden_dims_mem=None,
@@ -404,9 +423,10 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         self.state_dim = self.d_global + self.num_assets * self.d_asset
         self.action_dim = int(action_dim)
         self.d_model = int(d_model)
+        self.asset_embed_dim = self.d_model if asset_embed_dim is None else int(asset_embed_dim)
         self.num_heads = int(num_heads)
+        self.n_att_layers = int(n_att_layers)
         self.use_layer_norm = bool(use_layer_norm)
-        self.use_mean_pool = bool(use_mean_pool)
         self.d_mem = int(d_mem)
         self.d_ff = int(d_ff)
         self.combine_mode = combine_mode
@@ -416,6 +436,16 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         self.recurrent_activation = recurrent_activation
         self.recurrent_type = recurrent_type
         self.recurrent_kwargs = dict(recurrent_kwargs or {})
+        if self.asset_embed_dim <= 0:
+            raise ValueError(f"asset_embed_dim must be >= 1, got {self.asset_embed_dim}.")
+        if self.n_att_layers < 1:
+            raise ValueError(f"n_att_layers must be >= 1, got {self.n_att_layers}.")
+        self.token_dim = self.d_model + self.asset_embed_dim
+        if self.num_heads > 1 and self.token_dim % self.num_heads != 0:
+            raise ValueError(
+                f"d_model + asset_embed_dim ({self.token_dim}) must be divisible by "
+                f"num_heads ({self.num_heads})."
+            )
 
         # Per-asset feature extractor: sees [asset_i, globals_broadcast]
         self.asset_extractor = VanillaNetwork(
@@ -424,20 +454,18 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
             hidden_dims=hidden_dims_asset,
             activation=activation,
         )
+        self.asset_embedding = torch.nn.Embedding(self.num_assets, self.asset_embed_dim)
+        torch.nn.init.xavier_uniform_(self.asset_embedding.weight)
+        self.register_buffer("_asset_ids", torch.arange(self.num_assets, dtype=torch.long), persistent=False)
 
-        # Cross-attention across asset tokens (self-attention)
-        if self.num_heads <= 1:
-            self.attention = CrossAttention(self.d_model)
-        else:
-            self.attention = MultiHeadCrossAttention(self.d_model, num_heads=self.num_heads)
-
-        self.ln_attn = torch.nn.LayerNorm(self.d_model) if self.use_layer_norm else torch.nn.Identity()
+        # Residual self-attention stack over concatenated asset tokens.
+        self.attention_layers = torch.nn.ModuleList(
+            _ResidualAttentionBlock(self.token_dim, self.num_heads, self.use_layer_norm)
+            for _ in range(self.n_att_layers)
+        )
 
         # Dim fed into the recurrent and feedforward branches
-        if self.use_mean_pool:
-            self._post_attn_dim = self.d_model
-        else:
-            self._post_attn_dim = self.num_assets * self.d_model
+        self._post_attn_dim = self.num_assets * self.token_dim
 
         # Recurrent branch (memory). With hidden_dims_mem == [] this is a single
         # recurrent cell mapping post_attn_dim → d_mem directly. With non-empty
@@ -487,7 +515,7 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
                     f"divisible by n_directions * num_assets ({denom})."
                 )
             self.n_size_buckets = per_asset_logits // denom
-            per_asset_in = self.d_model + head_in
+            per_asset_in = self.token_dim + head_in
             per_asset_out = self.n_directions * self.n_size_buckets
             self.per_asset_head = VanillaNetwork(
                 per_asset_in,
@@ -500,12 +528,13 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
 
     def _encode_tokens(self, x_flat: torch.Tensor) -> torch.Tensor:
         """
-        x_flat : (B, state_dim)  →  tokens (B, N, d_model)
+        x_flat : (B, state_dim)  →  tokens (B, N, token_dim)
 
         Splits into globals + per-asset block, runs the shared per-asset MLP,
-        and applies cross-attention across assets (with optional residual + LN).
-        Pooling is left to ``_pool_tokens`` so callers can also access the
-        per-token representation.
+        concatenates a learned per-asset embedding, and applies the residual
+        self-attention stack across assets. Flattening is left to
+        ``_flatten_tokens`` so callers can also access the per-token
+        representation.
         """
         B = x_flat.shape[0]
         globals_feat = x_flat[:, : self.d_global]                                          # (B, d_global)
@@ -514,19 +543,20 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         globals_broadcast = globals_feat.unsqueeze(1).expand(-1, self.num_assets, -1)      # (B, N, d_global)
         per_asset_in = torch.cat([asset_feat, globals_broadcast], dim=-1)                   # (B, N, d_asset+d_global)
 
-        tokens = self.asset_extractor(per_asset_in).view(B, self.num_assets, self.d_model)  # (B, N, d_model)
-        attn_out = self.attention(tokens, tokens)                                           # (B, N, d_model)
-        return self.ln_attn(tokens + attn_out)                                              # (B, N, d_model)
+        asset_repr = self.asset_extractor(per_asset_in).view(B, self.num_assets, self.d_model)
+        asset_emb = self.asset_embedding(self._asset_ids).unsqueeze(0).expand(B, -1, -1)
+        tokens = torch.cat([asset_repr, asset_emb], dim=-1)                                 # (B, N, token_dim)
+        for block in self.attention_layers:
+            tokens = block(tokens)
+        return tokens
 
-    def _pool_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
-        """tokens (B, N, d_model) → (B, post_attn_dim)"""
-        if self.use_mean_pool:
-            return tokens.mean(dim=1)
+    def _flatten_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+        """tokens (B, N, token_dim) → (B, post_attn_dim)"""
         return tokens.reshape(tokens.shape[0], -1)
 
     def _build_logits(self, tokens: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
         """
-        tokens : (B, N, d_model)
+        tokens : (B, N, token_dim)
         h      : (B, d_mem + d_ff)
         returns logits (B, action_dim)
         """
@@ -535,7 +565,7 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
 
         B = h.shape[0]
         h_broadcast = h.unsqueeze(1).expand(-1, self.num_assets, -1)                        # (B, N, head_in)
-        per_asset_in = torch.cat([tokens, h_broadcast], dim=-1)                             # (B, N, d_model+head_in)
+        per_asset_in = torch.cat([tokens, h_broadcast], dim=-1)                             # (B, N, token_dim+head_in)
         per_asset_logits = self.per_asset_head(per_asset_in)                                # (B, N, n_dir*K)
         per_asset_logits = per_asset_logits.view(B, self.num_assets, self.n_directions, self.n_size_buckets)
         # Direction-major scatter: [idle, dir0(asset×bucket), dir1(...), ...]
@@ -557,8 +587,8 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         shape = x.shape  # (..., state_dim)
         x_flat = x.reshape(-1, self.state_dim)                          # (B', state_dim)
-        tokens = self._encode_tokens(x_flat)                            # (B', N, d_model)
-        z = self._pool_tokens(tokens)                                   # (B', post_attn_dim)
+        tokens = self._encode_tokens(x_flat)                            # (B', N, token_dim)
+        z = self._flatten_tokens(tokens)                                # (B', post_attn_dim)
 
         h_mem = self.recurrent(z)                                       # (B', d_mem)
         h_ff = self.feedforward(z)                                      # (B', d_ff)
@@ -601,8 +631,8 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
 
         # Encode all (T, B) tokens in a single batched pass
         x_flat = x_batched.reshape(T * B, self.state_dim)
-        tokens_flat = self._encode_tokens(x_flat)                    # (T*B, N, d_model)
-        z_flat = self._pool_tokens(tokens_flat)                      # (T*B, post_attn_dim)
+        tokens_flat = self._encode_tokens(x_flat)                    # (T*B, N, token_dim)
+        z_flat = self._flatten_tokens(tokens_flat)                   # (T*B, post_attn_dim)
         z_seq = z_flat.view(T, B, -1)                                # (T, B, post_attn_dim)
 
         # Recurrent branch: sequence mode

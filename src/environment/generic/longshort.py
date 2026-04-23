@@ -374,19 +374,74 @@ class MultiCurrencyEnv:
     def _compute_hl_rel(self, high: torch.Tensor, low: torch.Tensor) -> torch.Tensor:
         return 2.0 * (high - low) / (high + low + self.eps)
 
-    def _get_market_inputs(self, data: dict) -> tuple[float, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        for key in ("close", "high", "low", "volume", "time"):
-            if key not in data:
-                raise KeyError(f"data must contain '{key}'")
-        device = self._market_device(data)
-        close  = data["close"].to(device=device, dtype=self.dtype).reshape(-1)
-        high   = data["high"].to(device=device, dtype=self.dtype).reshape(-1)
-        low    = data["low"].to(device=device, dtype=self.dtype).reshape(-1)
-        volume = data["volume"].to(device=device, dtype=self.dtype).reshape(-1)
-        for name, value in (("close", close), ("volume", volume), ("high", high), ("low", low)):
-            if value.numel() != self.N:
-                raise ValueError(f"data['{name}'] must have {self.N} elements, got {value.numel()}")
-        return float(data["time"]), close, high, low, volume
+    def _coerce_time_scalar(self, value, *, name: str = "time") -> float:
+        if isinstance(value, torch.Tensor):
+            if value.numel() != 1:
+                raise ValueError(f"{name} must be a scalar tensor, got shape {tuple(value.shape)}.")
+            return float(value.item())
+        return float(value)
+
+    def _coerce_market_tensor(self, name: str, value, device: torch.device) -> torch.Tensor:
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"{name} must be a torch.Tensor, got {type(value).__name__}.")
+        value = value.to(device=device, dtype=self.dtype).reshape(-1)
+        if value.numel() != self.N:
+            raise ValueError(f"{name} must have {self.N} elements, got {value.numel()}.")
+        return value
+
+    def _get_market_inputs(
+        self,
+        close=None,
+        high=None,
+        low=None,
+        volume=None,
+        time=None,
+        *,
+        data: dict | None = None,
+    ) -> tuple[float, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if data is None and isinstance(close, dict):
+            data = close
+            close = high = low = volume = time = None
+
+        if data is not None:
+            if any(value is not None for value in (close, high, low, volume, time)):
+                raise ValueError("Pass either 'data' or raw market tensors, not both.")
+            for key in ("close", "high", "low", "volume", "time"):
+                if key not in data:
+                    raise KeyError(f"data must contain '{key}'")
+            device = self._market_device(data)
+            close = self._coerce_market_tensor("data['close']", data["close"], device)
+            high = self._coerce_market_tensor("data['high']", data["high"], device)
+            low = self._coerce_market_tensor("data['low']", data["low"], device)
+            volume = self._coerce_market_tensor("data['volume']", data["volume"], device)
+            t = self._coerce_time_scalar(data["time"], name="data['time']")
+            return t, close, high, low, volume
+
+        missing = [
+            name for name, value in (
+                ("close", close),
+                ("high", high),
+                ("low", low),
+                ("volume", volume),
+                ("time", time),
+            )
+            if value is None
+        ]
+        if missing:
+            raise KeyError(f"Missing market inputs: {', '.join(missing)}")
+
+        device = self._state_device()
+        for value in (close, high, low, volume):
+            if isinstance(value, torch.Tensor):
+                device = value.device
+                break
+
+        close = self._coerce_market_tensor("close", close, device)
+        high = self._coerce_market_tensor("high", high, device)
+        low = self._coerce_market_tensor("low", low, device)
+        volume = self._coerce_market_tensor("volume", volume, device)
+        t = self._coerce_time_scalar(time)
+        return t, close, high, low, volume
 
     def _get_state(self) -> State:
         t_vec = self._compute_time_vector().to(self.dtype)
@@ -423,11 +478,18 @@ class MultiCurrencyEnv:
     # reset / update
     # -------------------------------------------------------------------------
 
-    def reset(self, data: dict, C0: Optional[float] = None) -> State:
+    def reset(self, data_or_close=None, high=None, low=None, volume=None, time=None, C0: Optional[float] = None, *, data: dict | None = None) -> State:
         if C0 is not None:
             self.C0 = float(C0)
 
-        t, close, high, low, volume = self._get_market_inputs(data)
+        t, close, high, low, volume = self._get_market_inputs(
+            close=data_or_close,
+            high=high,
+            low=low,
+            volume=volume,
+            time=time,
+            data=data,
+        )
         device = close.device
 
         self.C = torch.tensor(self.C0, dtype=self.dtype, device=device)
@@ -459,9 +521,16 @@ class MultiCurrencyEnv:
             self.history.append(state)
         return state
 
-    def _update(self, data: dict) -> None:
+    def _update(self, close_or_data=None, high=None, low=None, volume=None, time=None, *, data: dict | None = None) -> None:
         self.V_prev = self.V.detach().clone()
-        t_new, close, high, low, volume = self._get_market_inputs(data)
+        t_new, close, high, low, volume = self._get_market_inputs(
+            close=close_or_data,
+            high=high,
+            low=low,
+            volume=volume,
+            time=time,
+            data=data,
+        )
         if t_new < self.t:
             print("WARNING: dt < 0 - setting to zero!")
         self.dt = (t_new - self.t) * float(t_new > self.t)
@@ -611,9 +680,16 @@ class MultiCurrencyEnv:
     # main step
     # -------------------------------------------------------------------------
 
-    def step(self, a, data: dict) -> Tuple[State, float, bool, Dict]:
+    def step(self, a, data_or_close=None, high=None, low=None, volume=None, time=None, *, data: dict | None = None) -> Tuple[State, float, bool, Dict]:
         action_info, valid_trade = self._trade(a)
-        self._update(data)
+        self._update(
+            close_or_data=data_or_close,
+            high=high,
+            low=low,
+            volume=volume,
+            time=time,
+            data=data,
+        )
         reward = self._reward()
 
         done = float(self.V) <= self.bankruptcy_threshold
