@@ -91,6 +91,76 @@ def _split_logits(logits: torch.Tensor, primary_dim: int, K: int):
     return logits_d, logits_buy, logits_sell
 
 
+def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=None):
+    """
+    Normalize historical inputs for single-environment training.
+
+    Supports either:
+    - ``data`` as a sequence of per-step dicts with keys
+      ``close/high/low/volume/time``, or
+    - ``data`` as the ``close`` tensor together with keyword tensors
+      ``high``, ``low``, ``volume``, and ``times``.
+    """
+    if isinstance(data, torch.Tensor):
+        close = data
+        missing = [
+            name for name, value in (
+                ("high", high),
+                ("low", low),
+                ("volume", volume),
+                ("times", times),
+            )
+            if value is None
+        ]
+        if missing:
+            raise KeyError(
+                "Tensor historical input requires keyword tensors for "
+                + ", ".join(missing)
+                + "."
+            )
+
+        tensors = {
+            "close": close,
+            "high": high,
+            "low": low,
+            "volume": volume,
+            "times": times,
+        }
+        T = int(close.shape[0])
+        for name, value in tensors.items():
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"{name} must be a torch.Tensor, got {type(value).__name__}.")
+            if value.shape[0] != T:
+                raise ValueError(f"{name} must have leading dimension {T}, got {value.shape[0]}.")
+
+        def time_at(idx: int) -> float:
+            return float(times[idx])
+
+        def reset_env(env, idx: int):
+            return env.reset(close[idx], high[idx], low[idx], volume[idx], times[idx])
+
+        def step_env(env, action, idx: int):
+            return env.step(action, close[idx], high[idx], low[idx], volume[idx], times[idx])
+
+        return T, time_at, reset_env, step_env
+
+    if any(value is not None for value in (high, low, volume, times)):
+        raise ValueError("Pass either list-of-dicts historical data or raw tensors, not both.")
+
+    T = len(data)
+
+    def time_at(idx: int) -> float:
+        return float(data[idx]["time"])
+
+    def reset_env(env, idx: int):
+        return env.reset(data[idx])
+
+    def step_env(env, action, idx: int):
+        return env.step(action, data=data[idx])
+
+    return T, time_at, reset_env, step_env
+
+
 # ---------------------------------------------------------------------------
 # Mixin: hierarchical policy math (sampling, log-prob, routed entropy)
 # ---------------------------------------------------------------------------
@@ -448,18 +518,30 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
         init_optimizer=False,
         store_results=True,
         max_grad_norm=None,
+        *,
+        high=None,
+        low=None,
+        volume=None,
+        times=None,
     ):
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
+        T, time_at, reset_env, step_env = _resolve_historical_source(
+            data,
+            high=high,
+            low=low,
+            volume=volume,
+            times=times,
+        )
         total_reward = []
         total_loss   = []
         total_info   = []
 
         for episode in range(1, n_episodes + 1):
-            start  = int(_sample_start_indices(len(data), max_steps).item())
-            sim_t0 = float(data[start]["time"])
-            state  = env.reset(data[start])
+            start  = int(_sample_start_indices(T, max_steps).item())
+            sim_t0 = time_at(start)
+            state  = reset_env(env, start)
             self.buffer.clear()
 
             if store_results:
@@ -476,7 +558,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
                 else:
                     action = None
 
-                next_state, reward, done, info = env.step(action, data[start + step])
+                next_state, reward, done, info = step_env(env, action, start + step)
 
                 if store_results:
                     episode_reward.append(reward)
@@ -503,7 +585,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
                         if store_results:
                             episode_loss.append(loss_dict)
 
-                        msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
+                        msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
                         for key, val in loss_dict.items():
                             msg += f" - {key}: {sum(val) / len(val):.5f}"
                         print(msg, end="\r")
@@ -512,7 +594,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
                         break
                 else:
                     if step % update_interval == 1:
-                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - warm up in progress...", end="\r")
+                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - warm up in progress...", end="\r")
 
                 state = next_state
                 step += 1
@@ -522,7 +604,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
                 total_reward.append(episode_reward)
                 total_info.append(episode_info)
 
-            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
+            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
             if store_results and len(episode_loss) > 0:
                 keys = episode_loss[0].keys()
                 for key in keys:
@@ -825,18 +907,30 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
         init_optimizer=False,
         store_results=True,
         max_grad_norm=None,
+        *,
+        high=None,
+        low=None,
+        volume=None,
+        times=None,
     ):
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
+        T, time_at, reset_env, step_env = _resolve_historical_source(
+            data,
+            high=high,
+            low=low,
+            volume=volume,
+            times=times,
+        )
         total_reward = []
         total_loss   = []
         total_info   = []
 
         for episode in range(1, n_episodes + 1):
-            start   = int(_sample_start_indices(len(data), max_steps).item())
-            sim_t0  = float(data[start]["time"])
-            state   = env.reset(data[start])
+            start   = int(_sample_start_indices(T, max_steps).item())
+            sim_t0  = time_at(start)
+            state   = reset_env(env, start)
             burn_in = burn_in_updates
             self.net.reset()
             self.buffer.clear()
@@ -856,7 +950,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
                 else:
                     action = None
 
-                next_state, reward, done, info = env.step(action, data[start + step])
+                next_state, reward, done, info = step_env(env, action, start + step)
 
                 if store_results:
                     episode_reward.append(reward)
@@ -888,7 +982,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
                             if store_results:
                                 episode_loss.append(loss_dict)
 
-                            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
+                            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
                             for key, val in loss_dict.items():
                                 msg += f" - {key}: {sum(val) / len(val):.5f}"
                             print(msg, end="\r")
@@ -900,7 +994,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
                         break
                 else:
                     if step % update_interval == 1:
-                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - warm up in progress...", end="\r")
+                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - warm up in progress...", end="\r")
 
                 state = next_state
                 step += 1
@@ -910,7 +1004,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
                 total_reward.append(episode_reward)
                 total_info.append(episode_info)
 
-            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(data[start + step]['time']) - sim_t0)}] - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
+            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
             if store_results and len(episode_loss) > 0:
                 keys = episode_loss[0].keys()
                 for key in keys:
