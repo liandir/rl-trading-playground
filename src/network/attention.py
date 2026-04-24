@@ -23,15 +23,16 @@ def _scaled_dot_product_attention(
     attn_dropout: float,
     training: bool,
 ) -> torch.Tensor:
-    scores = torch.matmul(q_h, k_h.transpose(-2, -1)) * scale  # (..., H, Lq, Lk)
-    if mask is not None:
-        if mask.dim() == scores.dim() - 1:
-            mask = mask.unsqueeze(-3)
-        scores = scores.masked_fill(~mask, float("-inf"))
-    attn = torch.softmax(scores, dim=-1)
-    if attn_dropout > 0.0 and training:
-        attn = torch.nn.functional.dropout(attn, p=attn_dropout)
-    return torch.matmul(attn, v_h)  # (..., H, Lq, Lk) @ (..., H, Lk, D)
+    if mask is not None and mask.dim() == q_h.dim() - 1:
+        mask = mask.unsqueeze(-3)
+    return torch.nn.functional.scaled_dot_product_attention(
+        q_h,
+        k_h,
+        v_h,
+        attn_mask=mask,
+        dropout_p=attn_dropout if training else 0.0,
+        scale=scale,
+    )
 
 
 def _init_linear(linear: torch.nn.Linear, *, bias: bool) -> None:
@@ -122,9 +123,12 @@ class CrossAttention(torch.nn.Module):
         """
         q    : (..., Lq, d_model)
         kv   : (..., Lk, d_kv)
-        mask : broadcastable to (..., Lq, Lk); True = keep, False = mask out.
-               If mask has one fewer dim than the attention scores, it is
-               treated as head-agnostic and broadcast across heads.
+        mask : bool tensor; True = keep, False = mask out. Must be broadcastable
+               to the attention scores shape (..., num_heads, Lq, Lk). As a
+               convenience, a mask with exactly one fewer dim than the scores
+               (i.e. no head dim) is auto-unsqueezed at position -3 and thus
+               treated as head-agnostic. Any other rank must already be
+               broadcast-compatible with (..., num_heads, Lq, Lk).
         returns (..., Lq, d_model)
         """
         q_h = _split_heads(self.q_proj(q), self.num_heads, self.d_head)    # (..., H, Lq, D)
@@ -196,9 +200,12 @@ class SelfAttention(torch.nn.Module):
     ) -> torch.Tensor:
         """
         x    : (..., L, d_model)
-        mask : broadcastable to (..., L, L); True = keep, False = mask out.
-               If mask has one fewer dim than the attention scores, it is
-               treated as head-agnostic and broadcast across heads.
+        mask : bool tensor; True = keep, False = mask out. Must be broadcastable
+               to the attention scores shape (..., num_heads, L, L). As a
+               convenience, a mask with exactly one fewer dim than the scores
+               (i.e. no head dim) is auto-unsqueezed at position -3 and thus
+               treated as head-agnostic. Any other rank must already be
+               broadcast-compatible with (..., num_heads, L, L).
         returns (..., L, d_model)
         """
         q, k, v = self.qkv_proj(x).chunk(3, dim=-1)
@@ -220,7 +227,7 @@ class SelfAttention(torch.nn.Module):
 
 
 class ResidualCrossAttentionBlock(torch.nn.Module):
-    """Transformer-style cross-attention block with residual attention and FFN sublayers."""
+    """Pre-LN transformer-style cross-attention block with residual attention and FFN sublayers."""
 
     def __init__(
         self,
@@ -262,12 +269,12 @@ class ResidualCrossAttentionBlock(torch.nn.Module):
         kv: torch.Tensor,
         mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        q = self.ln_attn(q + self.attention(q, kv, mask=mask))
-        return self.ln_ffn(q + self.ffn(q))
+        q = q + self.attention(self.ln_attn(q), kv, mask=mask)
+        return q + self.ffn(self.ln_ffn(q))
 
 
 class ResidualSelfAttentionBlock(torch.nn.Module):
-    """Transformer-style self-attention block with fused-QKV attention and FFN sublayers."""
+    """Pre-LN transformer-style self-attention block with fused-QKV attention and FFN sublayers."""
 
     def __init__(
         self,
@@ -302,8 +309,8 @@ class ResidualSelfAttentionBlock(torch.nn.Module):
         )
 
     def forward(self, tokens: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
-        tokens = self.ln_attn(tokens + self.attention(tokens, mask=mask))
-        return self.ln_ffn(tokens + self.ffn(tokens))
+        tokens = tokens + self.attention(self.ln_attn(tokens), mask=mask)
+        return tokens + self.ffn(self.ln_ffn(tokens))
 
 
 __all__ = [
