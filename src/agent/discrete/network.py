@@ -1,6 +1,6 @@
 import torch
 
-from src.network.attention import CrossAttention, MultiHeadCrossAttention
+from src.network.attention import ResidualSelfAttentionBlock
 from src.network.vanilla import VanillaNetwork
 from src.network.recurrent import RecurrentNetwork, _build_recurrent_cell
 
@@ -289,21 +289,6 @@ class RecurrentActionQNetwork(torch.nn.Module):
         self.q_head.set_states(q_states, clone=clone, detach=detach, strict=strict)
 
 
-class _ResidualAttentionBlock(torch.nn.Module):
-    """Self-attention block with residual connection and optional LayerNorm."""
-
-    def __init__(self, d_model: int, num_heads: int, use_layer_norm: bool):
-        super().__init__()
-        if num_heads <= 1:
-            self.attention = CrossAttention(d_model)
-        else:
-            self.attention = MultiHeadCrossAttention(d_model, num_heads=num_heads)
-        self.ln = torch.nn.LayerNorm(d_model) if use_layer_norm else torch.nn.Identity()
-
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
-        return self.ln(tokens + self.attention(tokens, tokens))
-
-
 class AttentionMemoryActionValueNetwork(torch.nn.Module):
     """
     Per-asset action-value network for multi-asset discrete action spaces.
@@ -326,7 +311,7 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
                          (N, d_model + d_asset_emb)
                                  │
                                  v
-               residual self-attention stack × n_att_layers
+               transformer attention+FFN stack × n_att_layers
                (optional LayerNorm)  →  tokens (N, d_model + d_asset_emb)
                                  │
                            flatten over N
@@ -458,9 +443,9 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         torch.nn.init.xavier_uniform_(self.asset_embedding.weight)
         self.register_buffer("_asset_ids", torch.arange(self.num_assets, dtype=torch.long), persistent=False)
 
-        # Residual self-attention stack over concatenated asset tokens.
+        # Transformer-style self-attention stack over concatenated asset tokens.
         self.attention_layers = torch.nn.ModuleList(
-            _ResidualAttentionBlock(self.token_dim, self.num_heads, self.use_layer_norm)
+            ResidualSelfAttentionBlock(self.token_dim, self.num_heads, use_layer_norm=self.use_layer_norm)
             for _ in range(self.n_att_layers)
         )
 
@@ -531,8 +516,8 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         x_flat : (B, state_dim)  →  tokens (B, N, token_dim)
 
         Splits into globals + per-asset block, runs the shared per-asset MLP,
-        concatenates a learned per-asset embedding, and applies the residual
-        self-attention stack across assets. Flattening is left to
+        concatenates a learned per-asset embedding, and applies the
+        transformer-style attention/FFN stack across assets. Flattening is left to
         ``_flatten_tokens`` so callers can also access the per-token
         representation.
         """

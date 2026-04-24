@@ -79,6 +79,14 @@ def _gather_per_asset_mask(mask: torch.Tensor, asset_idx: torch.Tensor) -> torch
     asset_idx  : (...)        long
     returns    : (..., K)     bool   per-state slice mask[..., asset_idx, :]
     """
+    expected_ndim = asset_idx.ndim + 2
+    while mask.ndim < expected_ndim:
+        mask = mask.unsqueeze(mask.ndim - 2)
+    if mask.ndim != expected_ndim:
+        raise ValueError(
+            f"Expected mask ndim {expected_ndim} for asset_idx shape {tuple(asset_idx.shape)}, "
+            f"got {mask.ndim}."
+        )
     K = mask.shape[-1]
     idx = asset_idx.unsqueeze(-1).unsqueeze(-1).expand(*asset_idx.shape, 1, K)
     return mask.gather(-2, idx).squeeze(-2)
