@@ -99,15 +99,15 @@ def _split_logits(logits: torch.Tensor, primary_dim: int, K: int):
     return logits_d, logits_buy, logits_sell
 
 
-def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=None):
+def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=None, open_=None):
     """
     Normalize historical inputs for single-environment training.
 
     Supports either:
     - ``data`` as a sequence of per-step dicts with keys
-      ``close/high/low/volume/time``, or
+      ``close/high/low/volume/open/time``, or
     - ``data`` as the ``close`` tensor together with keyword tensors
-      ``high``, ``low``, ``volume``, and ``times``.
+      ``high``, ``low``, ``volume``, ``times``, and ``open_``.
     """
     if isinstance(data, torch.Tensor):
         close = data
@@ -117,6 +117,7 @@ def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=
                 ("low", low),
                 ("volume", volume),
                 ("times", times),
+                ("open_", open_),
             )
             if value is None
         ]
@@ -133,6 +134,7 @@ def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=
             "low": low,
             "volume": volume,
             "times": times,
+            "open_": open_,
         }
         T = int(close.shape[0])
         for name, value in tensors.items():
@@ -145,10 +147,10 @@ def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=
             return float(times[idx])
 
         def reset_env(env, idx: int):
-            return env.reset(close[idx], high[idx], low[idx], volume[idx], times[idx])
+            return env.reset(close[idx], high[idx], low[idx], volume[idx], times[idx], open_=open_[idx])
 
         def step_env(env, action, idx: int):
-            return env.step(action, close[idx], high[idx], low[idx], volume[idx], times[idx])
+            return env.step(action, close[idx], high[idx], low[idx], volume[idx], times[idx], open_[idx])
 
         return T, time_at, reset_env, step_env
 
@@ -531,6 +533,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
         low=None,
         volume=None,
         times=None,
+        open_=None,
     ):
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
@@ -541,6 +544,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
             low=low,
             volume=volume,
             times=times,
+            open_=open_,
         )
         total_reward = []
         total_loss   = []
@@ -624,7 +628,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
     def train_on_historical_bat(
         self,
         bat_env,
-        close, high, low, volume, times,
+        close, high, low, volume, times, open_,
         n_episodes,
         max_steps=2000,
         warm_up=0,
@@ -650,6 +654,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
             sim_t0 = float(times[starts[0]])
             obs    = bat_env.reset(
                 close[starts], high[starts], low[starts], volume[starts], times[starts],
+                open_=open_[starts],
             )
             self.buffer.clear()
 
@@ -673,7 +678,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
                     )
 
                 next_obs, rewards, dones = bat_env.step(
-                    step_actions, close[si], high[si], low[si], volume[si], times[si],
+                    step_actions, close[si], high[si], low[si], volume[si], times[si], open_[si],
                 )
 
                 if store_results and actions is not None:
@@ -920,6 +925,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
         low=None,
         volume=None,
         times=None,
+        open_=None,
     ):
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
@@ -930,6 +936,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
             low=low,
             volume=volume,
             times=times,
+            open_=open_,
         )
         total_reward = []
         total_loss   = []
@@ -1024,7 +1031,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
     def train_on_historical_bat(
         self,
         bat_env,
-        close, high, low, volume, times,
+        close, high, low, volume, times, open_,
         n_episodes,
         max_steps=2000,
         warm_up=0,
@@ -1055,6 +1062,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
             sim_t0 = float(times[starts[0]])
             obs    = bat_env.reset(
                 close[starts], high[starts], low[starts], volume[starts], times[starts],
+                open_=open_[starts],
             )
             self.buffer.clear()
 
@@ -1078,7 +1086,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
                     )
 
                 next_obs, rewards, dones = bat_env.step(
-                    step_actions, close[si], high[si], low[si], volume[si], times[si],
+                    step_actions, close[si], high[si], low[si], volume[si], times[si], open_[si],
                 )
 
                 if store_results and actions is not None:

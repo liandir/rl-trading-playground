@@ -13,20 +13,25 @@ class State:
     Hybrid long/short trading state.
 
     Flattened layout of `to_tensor()`:
-        [ globals(8) | asset_0(3M+5) | asset_1(3M+5) | ... | asset_{N-1}(3M+5) ]
+        [ globals(8) | asset_0(4M+9) | asset_1(4M+9) | ... | asset_{N-1}(4M+9) ]
 
     Globals (8):
         time(6), cash_rel(1), rho(1)
 
-    Per-asset block of size 3M+5:
-        p_rel[:, k]   (M)
-        v_rel[:, k]   (M)
-        vol_rel[:, k] (M)
-        hl_rel[k]     (1)
-        x_rel[k]      (1)   signed value weight of asset k
-        c_rel[k]      (1)
-        unrl_rel[k]   (1)
-        side_rel[k]   (1)
+    Per-asset block of size 4M+9:
+        p_rel[:, k]          (M)
+        v_rel[:, k]          (M)
+        vol_rel[:, k]        (M)
+        body_smooth[:, k]    (M)   EMA of (close-open)/range across tau scales
+        hl_rel[k]            (1)
+        body_rel[k]          (1)   signed (close-open)/range, in [-1, 1]
+        ret_rel[k]           (1)   bar return (close-open)/open
+        upper_wick_rel[k]    (1)   (high - max(open,close)) / range
+        lower_wick_rel[k]    (1)   (min(open,close) - low) / range
+        x_rel[k]             (1)   signed value weight of asset k
+        c_rel[k]             (1)
+        unrl_rel[k]          (1)
+        side_rel[k]          (1)
     """
 
     # globals
@@ -38,7 +43,12 @@ class State:
     p_rel: torch.Tensor           # [M, N]
     v_rel: torch.Tensor           # [M, N]
     vol_rel: torch.Tensor         # [M, N]
+    body_smooth: torch.Tensor     # [M, N]
     hl_rel: torch.Tensor          # [N]
+    body_rel: torch.Tensor        # [N]
+    ret_rel: torch.Tensor         # [N]
+    upper_wick_rel: torch.Tensor  # [N]
+    lower_wick_rel: torch.Tensor  # [N]
     x_rel: torch.Tensor           # [N]    signed per-asset value weights (pos_units * p / V)
     c_rel: torch.Tensor           # [N]    committed distribution (>= 0)
     unrl_rel: torch.Tensor        # [N]    signed after-tax PnL / committed (0 when flat)
@@ -50,16 +60,20 @@ class State:
             self.cash_rel.reshape(1),
             self.rho.reshape(1),
         ])
-        # (3M, N) -> (N, 3M)
-        mn = torch.cat([self.p_rel, self.v_rel, self.vol_rel], dim=0).transpose(0, 1)
+        # (4M, N) -> (N, 4M)
+        mn = torch.cat([self.p_rel, self.v_rel, self.vol_rel, self.body_smooth], dim=0).transpose(0, 1)
         scalars = torch.stack([
             self.hl_rel,
+            self.body_rel,
+            self.ret_rel,
+            self.upper_wick_rel,
+            self.lower_wick_rel,
             self.x_rel,
             self.c_rel,
             self.unrl_rel,
             self.side_rel,
-        ], dim=1)  # (N, 5)
-        asset_block = torch.cat([mn, scalars], dim=1)  # (N, 3M+5)
+        ], dim=1)  # (N, 9)
+        asset_block = torch.cat([mn, scalars], dim=1)  # (N, 4M+9)
         return torch.cat([globals_block, asset_block.flatten()])
 
 
@@ -88,8 +102,23 @@ class StateHistory:
     def get_vol_rel(self) -> torch.Tensor:
         return torch.stack([s.vol_rel for s in self.states])
 
+    def get_body_smooth(self) -> torch.Tensor:
+        return torch.stack([s.body_smooth for s in self.states])
+
     def get_hl_rel(self) -> torch.Tensor:
         return torch.stack([s.hl_rel for s in self.states])
+
+    def get_body_rel(self) -> torch.Tensor:
+        return torch.stack([s.body_rel for s in self.states])
+
+    def get_ret_rel(self) -> torch.Tensor:
+        return torch.stack([s.ret_rel for s in self.states])
+
+    def get_upper_wick_rel(self) -> torch.Tensor:
+        return torch.stack([s.upper_wick_rel for s in self.states])
+
+    def get_lower_wick_rel(self) -> torch.Tensor:
+        return torch.stack([s.lower_wick_rel for s in self.states])
 
     def get_x_rel(self) -> torch.Tensor:
         return torch.stack([s.x_rel for s in self.states])
@@ -128,7 +157,7 @@ class MultiCurrencyEnv:
     Close semantics:
         close frac * current position units on target asset.
 
-    state_dim = 3*M*N + 5*N + 8
+    state_dim = 4*M*N + 9*N + 8
     """
 
     def __init__(
@@ -183,7 +212,7 @@ class MultiCurrencyEnv:
 
         self.C0 = float(C0)
 
-        self.state_dim = 3 * self.M * N + 5 * N + 8
+        self.state_dim = 4 * self.M * N + 9 * N + 8
         self.action_dim = 1 + 3 * self.N
 
         # runtime attributes
@@ -194,6 +223,7 @@ class MultiCurrencyEnv:
         self.t = None
         self.dt = None
         self.p = None
+        self.o = None
         self.v = None
         self.v_smooth = None
         self.p_smooth = None
@@ -202,6 +232,11 @@ class MultiCurrencyEnv:
         self.hl_smooth = None
         self.v_rel = None
         self.vol_rel = None
+        self.body_rel = None
+        self.body_smooth = None
+        self.ret_rel = None
+        self.upper_wick_rel = None
+        self.lower_wick_rel = None
         self.V_prev = None
         self.realized_cost = None
         self.realized_pnl = None
@@ -374,6 +409,23 @@ class MultiCurrencyEnv:
     def _compute_hl_rel(self, high: torch.Tensor, low: torch.Tensor) -> torch.Tensor:
         return 2.0 * (high - low) / (high + low + self.eps)
 
+    def _compute_bar_features(
+        self,
+        open_: torch.Tensor,
+        high: torch.Tensor,
+        low: torch.Tensor,
+        close: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Returns (body_rel, ret_rel, upper_wick_rel, lower_wick_rel) per asset."""
+        rng = (high - low).clamp(min=self.eps)
+        body_rel = ((close - open_) / rng).clamp(-1.0, 1.0)
+        ret_rel = (close - open_) / open_.clamp(min=self.eps)
+        body_high = torch.maximum(open_, close)
+        body_low = torch.minimum(open_, close)
+        upper_wick_rel = ((high - body_high) / rng).clamp(min=0.0)
+        lower_wick_rel = ((body_low - low) / rng).clamp(min=0.0)
+        return body_rel, ret_rel, upper_wick_rel, lower_wick_rel
+
     def _coerce_time_scalar(self, value, *, name: str = "time") -> float:
         if isinstance(value, torch.Tensor):
             if value.numel() != 1:
@@ -396,17 +448,18 @@ class MultiCurrencyEnv:
         low=None,
         volume=None,
         time=None,
+        open_=None,
         *,
         data: dict | None = None,
-    ) -> tuple[float, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[float, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if data is None and isinstance(close, dict):
             data = close
-            close = high = low = volume = time = None
+            close = high = low = volume = time = open_ = None
 
         if data is not None:
-            if any(value is not None for value in (close, high, low, volume, time)):
+            if any(value is not None for value in (close, high, low, volume, time, open_)):
                 raise ValueError("Pass either 'data' or raw market tensors, not both.")
-            for key in ("close", "high", "low", "volume", "time"):
+            for key in ("close", "high", "low", "volume", "time", "open"):
                 if key not in data:
                     raise KeyError(f"data must contain '{key}'")
             device = self._market_device(data)
@@ -414,8 +467,9 @@ class MultiCurrencyEnv:
             high = self._coerce_market_tensor("data['high']", data["high"], device)
             low = self._coerce_market_tensor("data['low']", data["low"], device)
             volume = self._coerce_market_tensor("data['volume']", data["volume"], device)
+            open_ = self._coerce_market_tensor("data['open']", data["open"], device)
             t = self._coerce_time_scalar(data["time"], name="data['time']")
-            return t, close, high, low, volume
+            return t, close, high, low, volume, open_
 
         missing = [
             name for name, value in (
@@ -424,6 +478,7 @@ class MultiCurrencyEnv:
                 ("low", low),
                 ("volume", volume),
                 ("time", time),
+                ("open", open_),
             )
             if value is None
         ]
@@ -431,7 +486,7 @@ class MultiCurrencyEnv:
             raise KeyError(f"Missing market inputs: {', '.join(missing)}")
 
         device = self._state_device()
-        for value in (close, high, low, volume):
+        for value in (close, high, low, volume, open_):
             if isinstance(value, torch.Tensor):
                 device = value.device
                 break
@@ -440,8 +495,9 @@ class MultiCurrencyEnv:
         high = self._coerce_market_tensor("high", high, device)
         low = self._coerce_market_tensor("low", low, device)
         volume = self._coerce_market_tensor("volume", volume, device)
+        open_ = self._coerce_market_tensor("open", open_, device)
         t = self._coerce_time_scalar(time)
-        return t, close, high, low, volume
+        return t, close, high, low, volume, open_
 
     def _get_state(self) -> State:
         t_vec = self._compute_time_vector().to(self.dtype)
@@ -458,7 +514,12 @@ class MultiCurrencyEnv:
             p_rel=self.p_rel.clone(),
             v_rel=self.v_rel.clone(),
             vol_rel=self.vol_rel.clone(),
+            body_smooth=self.body_smooth.clone(),
             hl_rel=self.hl_rel.clone(),
+            body_rel=self.body_rel.clone(),
+            ret_rel=self.ret_rel.clone(),
+            upper_wick_rel=self.upper_wick_rel.clone(),
+            lower_wick_rel=self.lower_wick_rel.clone(),
             x_rel=x_rel,
             c_rel=c_rel,
             unrl_rel=unrl_rel,
@@ -478,16 +539,17 @@ class MultiCurrencyEnv:
     # reset / update
     # -------------------------------------------------------------------------
 
-    def reset(self, data_or_close=None, high=None, low=None, volume=None, time=None, C0: Optional[float] = None, *, data: dict | None = None) -> State:
+    def reset(self, data_or_close=None, high=None, low=None, volume=None, time=None, C0: Optional[float] = None, open_=None, *, data: dict | None = None) -> State:
         if C0 is not None:
             self.C0 = float(C0)
 
-        t, close, high, low, volume = self._get_market_inputs(
+        t, close, high, low, volume, open_ = self._get_market_inputs(
             close=data_or_close,
             high=high,
             low=low,
             volume=volume,
             time=time,
+            open_=open_,
             data=data,
         )
         device = close.device
@@ -499,6 +561,7 @@ class MultiCurrencyEnv:
         self.t = t
         self.dt = 0.0
         self.p = close.clone()
+        self.o = open_.clone()
         self.v = volume.clone()
         if self.use_dollar_volume:
             self.v *= self.p
@@ -511,6 +574,15 @@ class MultiCurrencyEnv:
         self.v_rel = torch.zeros((self.M, self.N), dtype=self.dtype, device=device)
         self.vol_rel = torch.zeros((self.M, self.N), dtype=self.dtype, device=device)
 
+        body_rel, ret_rel, upper_wick_rel, lower_wick_rel = self._compute_bar_features(
+            open_, high, low, close,
+        )
+        self.body_rel = body_rel
+        self.ret_rel = ret_rel
+        self.upper_wick_rel = upper_wick_rel
+        self.lower_wick_rel = lower_wick_rel
+        self.body_smooth = self.body_rel[None, :].repeat(self.M, 1).clone()
+
         self.V_prev = self.V.detach().clone()
         self.realized_cost = torch.zeros(self.N, dtype=self.dtype, device=device)
         self.realized_pnl  = torch.zeros(self.N, dtype=self.dtype, device=device)
@@ -521,14 +593,15 @@ class MultiCurrencyEnv:
             self.history.append(state)
         return state
 
-    def _update(self, close_or_data=None, high=None, low=None, volume=None, time=None, *, data: dict | None = None) -> None:
+    def _update(self, close_or_data=None, high=None, low=None, volume=None, time=None, open_=None, *, data: dict | None = None) -> None:
         self.V_prev = self.V.detach().clone()
-        t_new, close, high, low, volume = self._get_market_inputs(
+        t_new, close, high, low, volume, open_ = self._get_market_inputs(
             close=close_or_data,
             high=high,
             low=low,
             volume=volume,
             time=time,
+            open_=open_,
             data=data,
         )
         if t_new < self.t:
@@ -536,6 +609,7 @@ class MultiCurrencyEnv:
         self.dt = (t_new - self.t) * float(t_new > self.t)
         self.t = t_new
         self.p[:] = close
+        self.o[:] = open_
 
         alpha_p = 1 - torch.exp(-self.dt / self.tau_p.clamp(min=self.eps))[:, None]
         self.p_smooth += alpha_p * (self.p[None, :] - self.p_smooth)
@@ -548,6 +622,15 @@ class MultiCurrencyEnv:
             self.v[:] *= self.p
         self.v_smooth += alpha_p * (self.v[None, :] - self.v_smooth)
         self.v_rel = (self.v[None, :] - self.v_smooth) / self.v_smooth.clamp(min=self.eps)
+
+        body_rel, ret_rel, upper_wick_rel, lower_wick_rel = self._compute_bar_features(
+            open_, high, low, close,
+        )
+        self.body_rel = body_rel
+        self.ret_rel = ret_rel
+        self.upper_wick_rel = upper_wick_rel
+        self.lower_wick_rel = lower_wick_rel
+        self.body_smooth += alpha_p * (self.body_rel[None, :] - self.body_smooth)
 
     # -------------------------------------------------------------------------
     # trading primitives
@@ -680,7 +763,7 @@ class MultiCurrencyEnv:
     # main step
     # -------------------------------------------------------------------------
 
-    def step(self, a, data_or_close=None, high=None, low=None, volume=None, time=None, *, data: dict | None = None) -> Tuple[State, float, bool, Dict]:
+    def step(self, a, data_or_close=None, high=None, low=None, volume=None, time=None, open_=None, *, data: dict | None = None) -> Tuple[State, float, bool, Dict]:
         action_info, valid_trade = self._trade(a)
         self._update(
             close_or_data=data_or_close,
@@ -688,6 +771,7 @@ class MultiCurrencyEnv:
             low=low,
             volume=volume,
             time=time,
+            open_=open_,
             data=data,
         )
         reward = self._reward()
@@ -726,7 +810,7 @@ class BatchedMultiCurrencyEnv:
     Observation: (B, state_dim) tensor.
 
     Flattened layout matches `State.to_tensor()`:
-        [ globals(8) | asset_0(3M+5) | ... | asset_{N-1}(3M+5) ]
+        [ globals(8) | asset_0(4M+9) | ... | asset_{N-1}(4M+9) ]
     """
 
     def __init__(
@@ -776,7 +860,7 @@ class BatchedMultiCurrencyEnv:
         self.tau_p = tau_p.to(dtype)
         self.M = self.tau_p.numel()
 
-        self.state_dim = 3 * self.M * N + 5 * N + 8
+        self.state_dim = 4 * self.M * N + 9 * N + 8
         self.action_dim = 1 + 3 * N
 
         self._b_idx = torch.arange(B, device=self.tau_p.device)
@@ -787,6 +871,7 @@ class BatchedMultiCurrencyEnv:
         self.entry_price = None
         self.committed = None
         self.p = None
+        self.o = None
         self.v = None
         self.p_smooth = None
         self.v_smooth = None
@@ -795,6 +880,11 @@ class BatchedMultiCurrencyEnv:
         self.p_rel = None
         self.v_rel = None
         self.vol_rel = None
+        self.body_rel = None
+        self.body_smooth = None
+        self.ret_rel = None
+        self.upper_wick_rel = None
+        self.lower_wick_rel = None
         self.V_prev = None
         self.realized_cost = None
         self.realized_pnl = None
@@ -834,9 +924,11 @@ class BatchedMultiCurrencyEnv:
     # reset
     # -------------------------------------------------------------------------
 
-    def reset(self, close, high, low, volume, time, C0=None):
+    def reset(self, close, high, low, volume, time, open_=None, C0=None):
         if C0 is not None:
             self.C0 = float(C0)
+        if open_ is None:
+            raise TypeError("BatchedMultiCurrencyEnv.reset requires an `open_` tensor.")
         B, N, M = self.B, self.N, self.M
 
         device = close.device if isinstance(close, torch.Tensor) else self.tau_p.device
@@ -844,6 +936,7 @@ class BatchedMultiCurrencyEnv:
         high   = high.to(device=device, dtype=self.dtype)
         low    = low.to(device=device, dtype=self.dtype)
         volume = volume.to(device=device, dtype=self.dtype)
+        open_  = open_.to(device=device, dtype=self.dtype)
         self.t = (
             time.to(device=device, dtype=torch.float64)
             if isinstance(time, torch.Tensor)
@@ -856,6 +949,7 @@ class BatchedMultiCurrencyEnv:
         self.entry_price = torch.zeros(B, N, dtype=self.dtype, device=device)
         self.committed   = torch.zeros(B, N, dtype=self.dtype, device=device)
         self.p           = close.clone()
+        self.o           = open_.clone()
         self.v           = volume.clone()
         if self.use_dollar_volume:
             self.v = self.v * self.p
@@ -869,6 +963,13 @@ class BatchedMultiCurrencyEnv:
         self.v_rel   = torch.zeros(B, M, N, dtype=self.dtype, device=device)
         self.vol_rel = torch.zeros(B, M, N, dtype=self.dtype, device=device)
 
+        body_rel, ret_rel, upper_wick_rel, lower_wick_rel = self._bar_features(open_, high, low, close)
+        self.body_rel       = body_rel
+        self.ret_rel        = ret_rel
+        self.upper_wick_rel = upper_wick_rel
+        self.lower_wick_rel = lower_wick_rel
+        self.body_smooth    = self.body_rel[:, None, :].expand(B, M, N).clone()
+
         self.V_prev        = self.C.clone()
         self.realized_cost = torch.zeros(B, N, dtype=self.dtype, device=device)
         self.realized_pnl  = torch.zeros(B, N, dtype=self.dtype, device=device)
@@ -880,6 +981,16 @@ class BatchedMultiCurrencyEnv:
 
     def _hl_rel(self, high, low):
         return 2.0 * (high - low) / (high + low + self.eps)
+
+    def _bar_features(self, open_, high, low, close):
+        rng = (high - low).clamp(min=self.eps)
+        body_rel = ((close - open_) / rng).clamp(-1.0, 1.0)
+        ret_rel = (close - open_) / open_.clamp(min=self.eps)
+        body_high = torch.maximum(open_, close)
+        body_low = torch.minimum(open_, close)
+        upper_wick_rel = ((high - body_high) / rng).clamp(min=0.0)
+        lower_wick_rel = ((body_low - low) / rng).clamp(min=0.0)
+        return body_rel, ret_rel, upper_wick_rel, lower_wick_rel
 
     def _time_features(self):
         features = []
@@ -925,23 +1036,34 @@ class BatchedMultiCurrencyEnv:
         side_rel[self.pos_units > self.eps]  = 1.0
         side_rel[self.pos_units < -self.eps] = -1.0
 
-        # per-asset (M, N) stack -> (B, 3M, N) -> (B, N, 3M)
-        mn = torch.cat([self.p_rel, self.v_rel, self.vol_rel], dim=1).transpose(1, 2)
-        # per-asset scalars -> (B, N, 5)
-        scalars = torch.stack([self.hl_rel, x_assets, c_rel, unrl_rel, side_rel], dim=2)
-        asset_block = torch.cat([mn, scalars], dim=2)             # (B, N, 3M+5)
+        # per-asset (M, N) stack -> (B, 4M, N) -> (B, N, 4M)
+        mn = torch.cat([self.p_rel, self.v_rel, self.vol_rel, self.body_smooth], dim=1).transpose(1, 2)
+        # per-asset scalars -> (B, N, 9)
+        scalars = torch.stack([
+            self.hl_rel,
+            self.body_rel,
+            self.ret_rel,
+            self.upper_wick_rel,
+            self.lower_wick_rel,
+            x_assets,
+            c_rel,
+            unrl_rel,
+            side_rel,
+        ], dim=2)
+        asset_block = torch.cat([mn, scalars], dim=2)             # (B, N, 4M+9)
 
         globals_block = torch.cat([t_vec, cash_rel[:, None], rho[:, None]], dim=1)  # (B, 8)
 
         return torch.cat([globals_block, asset_block.reshape(B, -1)], dim=1)
 
-    def _update(self, close, high, low, volume, time):
+    def _update(self, close, high, low, volume, time, open_):
         self.V_prev = self.V.detach().clone()
         device = self._state_device()
         close  = close.to(device=device, dtype=self.dtype)
         high   = high.to(device=device, dtype=self.dtype)
         low    = low.to(device=device, dtype=self.dtype)
         volume = volume.to(device=device, dtype=self.dtype)
+        open_  = open_.to(device=device, dtype=self.dtype)
         t_new  = (
             time.to(device=device, dtype=torch.float64)
             if isinstance(time, torch.Tensor)
@@ -951,6 +1073,7 @@ class BatchedMultiCurrencyEnv:
         dt = (t_new - self.t).clamp(min=0.0).to(self.dtype)
         self.t = t_new
         self.p = close
+        self.o = open_
 
         alpha_p = 1.0 - torch.exp(-dt[:, None, None] / self.tau_p[None, :, None].clamp(min=self.eps))
         p_exp = self.p[:, None, :]
@@ -967,6 +1090,14 @@ class BatchedMultiCurrencyEnv:
         v_exp = self.v[:, None, :]
         self.v_smooth = self.v_smooth + alpha_p * (v_exp - self.v_smooth)
         self.v_rel    = (v_exp - self.v_smooth) / self.v_smooth.clamp(min=self.eps)
+
+        body_rel, ret_rel, upper_wick_rel, lower_wick_rel = self._bar_features(open_, high, low, close)
+        self.body_rel       = body_rel
+        self.ret_rel        = ret_rel
+        self.upper_wick_rel = upper_wick_rel
+        self.lower_wick_rel = lower_wick_rel
+        body_exp = body_rel[:, None, :]
+        self.body_smooth = self.body_smooth + alpha_p * (body_exp - self.body_smooth)
 
     def _split_actions(self, actions):
         device = self._state_device()
@@ -1122,10 +1253,10 @@ class BatchedMultiCurrencyEnv:
     # public step / mask
     # -------------------------------------------------------------------------
 
-    def step(self, actions, close, high, low, volume, time):
+    def step(self, actions, close, high, low, volume, time, open_):
         """Returns obs (B, state_dim), rewards (B,), dones (B,)."""
         self._trade(actions)
-        self._update(close, high, low, volume, time)
+        self._update(close, high, low, volume, time, open_)
         rewards = self._reward()
         dones   = self.V <= self.bankruptcy_threshold
         rewards = torch.where(dones, rewards - self.done_reward_penalty, rewards)

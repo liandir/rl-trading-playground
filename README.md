@@ -1,5 +1,8 @@
 # Multi-Currency Trading Environment — Formal Specification
 
+For the leveraged hierarchical long/short environment, see
+[docs/longshort_leverage_environment.md](/c:/Users/leand/Desktop/multi-currency-trading/docs/longshort_leverage_environment.md).
+
 ## 1. Overview
 
 We consider a portfolio of $N$ tradable assets (currencies).

@@ -532,7 +532,7 @@ class PPOAgent:
     def train_on_historical_bat(
         self,
         bat_env,
-        close, high, low, volume, times,
+        close, high, low, volume, times, open_,
         n_episodes,
         max_steps=2000,
         warm_up=0,
@@ -559,6 +559,7 @@ class PPOAgent:
             sim_t0 = float(times[starts[0]])
             obs    = bat_env.reset(
                 close[starts], high[starts], low[starts], volume[starts], times[starts],
+                open_=open_[starts],
             )
             self.buffer.clear()
 
@@ -579,7 +580,7 @@ class PPOAgent:
                     step_actions = torch.zeros(B, dtype=torch.long)
 
                 next_obs, rewards, dones = bat_env.step(
-                    step_actions, close[si], high[si], low[si], volume[si], times[si],
+                    step_actions, close[si], high[si], low[si], volume[si], times[si], open_[si],
                 )
 
                 if store_results and actions is not None:
@@ -1102,7 +1103,7 @@ class RecurrentPPOAgent:
     def train_on_historical_bat(
         self,
         bat_env,
-        close, high, low, volume, times,
+        close, high, low, volume, times, open_,
         n_episodes,
         max_steps=2000,
         warm_up=0,
@@ -1118,8 +1119,8 @@ class RecurrentPPOAgent:
         """
         Train on a BatchedMultiCurrencyEnv using pre-stacked tensor data.
 
-        close, high, low, volume : (T, N) float tensors
-        times                    : (T,)  float64 tensor of Unix timestamps
+        close, high, low, volume, open_ : (T, N) float tensors
+        times                           : (T,)  float64 tensor of Unix timestamps
 
         Each episode picks B independent random start offsets. All B
         environments step together — market data indexed as data[starts + step].
@@ -1151,6 +1152,7 @@ class RecurrentPPOAgent:
             sim_t0 = float(times[starts[0]])
             obs    = bat_env.reset(
                 close[starts], high[starts], low[starts], volume[starts], times[starts],
+                open_=open_[starts],
             )
             self.buffer.clear()
 
@@ -1171,7 +1173,7 @@ class RecurrentPPOAgent:
                     step_actions = torch.zeros(B, dtype=torch.long)
 
                 next_obs, rewards, dones = bat_env.step(
-                    step_actions, close[si], high[si], low[si], volume[si], times[si],
+                    step_actions, close[si], high[si], low[si], volume[si], times[si], open_[si],
                 )
 
                 if store_results and actions is not None:

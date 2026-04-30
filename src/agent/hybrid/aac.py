@@ -634,7 +634,7 @@ class AACAgent:
     def train_on_historical_bat(
         self,
         bat_env,
-        close, high, low, volume, times,
+        close, high, low, volume, times, open_,
         n_episodes,
         max_steps=2000,
         warm_up=0,
@@ -659,7 +659,7 @@ class AACAgent:
             starts = _sample_start_indices(T, max_steps, batch_size=B)
             sim_t0 = float(times[starts[0]])
             obs    = bat_env.reset(
-                close[starts], high[starts], low[starts], volume[starts], times[starts],
+                close[starts], high[starts], low[starts], volume[starts], times[starts], open_=open_[starts],
             )
             self.buffer.clear()
 
@@ -681,7 +681,7 @@ class AACAgent:
                     step_actions = (torch.zeros(B, dtype=torch.long), torch.zeros(B, dtype=dtype))
 
                 next_obs, rewards, dones = bat_env.step(
-                    step_actions, close[si], high[si], low[si], volume[si], times[si],
+                    step_actions, close[si], high[si], low[si], volume[si], times[si], open_[si],
                 )
 
                 if store_results and actions_d is not None:
@@ -1190,7 +1190,7 @@ class RecurrentAACAgent:
     def train_on_historical_bat(
         self,
         bat_env,
-        close, high, low, volume, times,
+        close, high, low, volume, times, open_,
         n_episodes,
         max_steps=2000,
         warm_up=0,
@@ -1220,7 +1220,7 @@ class RecurrentAACAgent:
             starts = _sample_start_indices(T, max_steps, batch_size=B)
             sim_t0 = float(times[starts[0]])
             obs    = bat_env.reset(
-                close[starts], high[starts], low[starts], volume[starts], times[starts],
+                close[starts], high[starts], low[starts], volume[starts], times[starts], open_=open_[starts],
             )
             self.buffer.clear()
 
@@ -1242,7 +1242,7 @@ class RecurrentAACAgent:
                     step_actions = (torch.zeros(B, dtype=torch.long), torch.zeros(B, dtype=dtype))
 
                 next_obs, rewards, dones = bat_env.step(
-                    step_actions, close[si], high[si], low[si], volume[si], times[si],
+                    step_actions, close[si], high[si], low[si], volume[si], times[si], open_[si],
                 )
 
                 if store_results and actions_d is not None:
