@@ -1,3 +1,26 @@
 data/
 config/
-**/__pycache__
+
+# Python bytecode and caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments managed by uv or other Python tooling
+.venv/
+venv/
+env/
+
+# Python packaging/build artifacts
+*.egg-info/
+build/
+dist/
+
+# Test/type/lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# uv cache, when configured inside the project
+.uv-cache/
