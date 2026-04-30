@@ -8,12 +8,28 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "bokeh>=3.9.0",
+    "forex",
+    "matplotlib>=3.10.9",
+    "torch>=2.11.0",
+    "torchaudio>=2.11.0",
+    "torchvision>=0.26.0",
     "websockets>=12,<16",
 ]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+    "jupyter>=1.1.1",
+    "notebook>=7.5.5",
+]
+
+[tool.uv.sources]
+forex = { git = "ssh://git@github.com/liandir/forex.git" }
 
 [project.urls]
 Repository = "https://github.com/liandir/multi-currency-trading"
