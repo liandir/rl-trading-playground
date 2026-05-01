@@ -53,6 +53,7 @@ class LongShortHierarchicalLeverageEnv(LeveragedMultiCurrencyEnv):
         max_leverage: float = 2.0,
         maintenance_margin_ratio: float | None = None,
         dtype: torch.dtype = torch.float32,
+        device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
         super().__init__(
@@ -74,6 +75,7 @@ class LongShortHierarchicalLeverageEnv(LeveragedMultiCurrencyEnv):
             max_leverage=max_leverage,
             maintenance_margin_ratio=maintenance_margin_ratio,
             dtype=dtype,
+            device=device,
             eps=eps,
         )
 
@@ -232,6 +234,7 @@ class BatchedLongShortHierarchicalLeverageEnv(BatchedLeveragedMultiCurrencyEnv):
         max_leverage: float = 2.0,
         maintenance_margin_ratio: float | None = None,
         dtype: torch.dtype = torch.float32,
+        device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
         super().__init__(
@@ -253,6 +256,7 @@ class BatchedLongShortHierarchicalLeverageEnv(BatchedLeveragedMultiCurrencyEnv):
             max_leverage=max_leverage,
             maintenance_margin_ratio=maintenance_margin_ratio,
             dtype=dtype,
+            device=device,
             eps=eps,
         )
 

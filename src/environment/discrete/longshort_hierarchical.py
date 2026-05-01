@@ -100,6 +100,7 @@ class LongShortHierarchicalEnv(MultiCurrencyEnv):
         size_buckets: Tuple[float, ...] = (0.50, 1.00),
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
+        device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
         super().__init__(
@@ -119,6 +120,7 @@ class LongShortHierarchicalEnv(MultiCurrencyEnv):
             reward_mode=reward_mode,
             done_reward_penalty=done_reward_penalty,
             dtype=dtype,
+            device=device,
             eps=eps,
         )
 
@@ -298,6 +300,7 @@ class BatchedLongShortHierarchicalEnv(BatchedMultiCurrencyEnv):
         size_buckets: Tuple[float, ...] = (0.50, 1.00),
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
+        device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
         super().__init__(
@@ -317,6 +320,7 @@ class BatchedLongShortHierarchicalEnv(BatchedMultiCurrencyEnv):
             reward_mode=reward_mode,
             done_reward_penalty=done_reward_penalty,
             dtype=dtype,
+            device=device,
             eps=eps,
         )
 

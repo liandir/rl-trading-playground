@@ -160,6 +160,7 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         max_leverage: float = 2.0,
         maintenance_margin_ratio: float | None = None,
         dtype: torch.dtype = torch.float32,
+        device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
         super().__init__(
@@ -179,6 +180,7 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
             reward_mode=reward_mode,
             done_reward_penalty=done_reward_penalty,
             dtype=dtype,
+            device=device,
             eps=eps,
         )
         if max_leverage <= 0.0:
@@ -511,6 +513,7 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         max_leverage: float = 2.0,
         maintenance_margin_ratio: float | None = None,
         dtype: torch.dtype = torch.float32,
+        device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
         super().__init__(
@@ -530,6 +533,7 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
             reward_mode=reward_mode,
             done_reward_penalty=done_reward_penalty,
             dtype=dtype,
+            device=device,
             eps=eps,
         )
         if max_leverage <= 0.0:
@@ -813,7 +817,7 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         self._cleanup_dust()
         return to_liquidate.any(dim=1)
 
-    def step(self, actions, close, high, low, volume, time, open_):
+    def step(self, actions, close, high, low, volume, time, open_=None):
         self._trade(actions)
         self._update(close, high, low, volume, time, open_)
         breached = self.V < self.maintenance_requirement

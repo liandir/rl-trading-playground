@@ -179,6 +179,7 @@ class MultiCurrencyEnv:
         reward_mode: str = "log",
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
+        device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
         assert isinstance(N, int) and N > 0
@@ -188,6 +189,8 @@ class MultiCurrencyEnv:
 
         self.N = N
         self.dtype = dtype
+        self._explicit_device = device is not None
+        self.device = torch.device(device) if device is not None else tau_p.device
         self.eps = float(eps)
 
         self.bankruptcy_threshold = float(bankruptcy_threshold)
@@ -204,7 +207,7 @@ class MultiCurrencyEnv:
         self.o_fee = float(open_fee)
         self.c_fee = float(close_fee)
 
-        self.tau_p = tau_p.to(self.dtype)
+        self.tau_p = tau_p.to(device=self.device, dtype=self.dtype)
         self.M = self.tau_p.numel()
 
         self.save_history = bool(save_history)
@@ -244,16 +247,18 @@ class MultiCurrencyEnv:
     def _state_device(self) -> torch.device:
         if isinstance(self.C, torch.Tensor):
             return self.C.device
-        return self.tau_p.device
+        return self.device
 
     def _market_device(self, data: dict) -> torch.device:
         if isinstance(self.C, torch.Tensor):
             return self.C.device
+        if self._explicit_device:
+            return self.device
         for key in ("close", "high", "low", "volume"):
             value = data.get(key)
             if isinstance(value, torch.Tensor):
                 return value.device
-        return self.tau_p.device
+        return self.device
 
     # -------------------------------------------------------------------------
     # action helpers
@@ -459,7 +464,7 @@ class MultiCurrencyEnv:
         if data is not None:
             if any(value is not None for value in (close, high, low, volume, time, open_)):
                 raise ValueError("Pass either 'data' or raw market tensors, not both.")
-            for key in ("close", "high", "low", "volume", "time", "open"):
+            for key in ("close", "high", "low", "volume", "time"):
                 if key not in data:
                     raise KeyError(f"data must contain '{key}'")
             device = self._market_device(data)
@@ -467,7 +472,7 @@ class MultiCurrencyEnv:
             high = self._coerce_market_tensor("data['high']", data["high"], device)
             low = self._coerce_market_tensor("data['low']", data["low"], device)
             volume = self._coerce_market_tensor("data['volume']", data["volume"], device)
-            open_ = self._coerce_market_tensor("data['open']", data["open"], device)
+            open_ = self._coerce_market_tensor("data['open']", data.get("open", data["close"]), device)
             t = self._coerce_time_scalar(data["time"], name="data['time']")
             return t, close, high, low, volume, open_
 
@@ -478,18 +483,20 @@ class MultiCurrencyEnv:
                 ("low", low),
                 ("volume", volume),
                 ("time", time),
-                ("open", open_),
             )
             if value is None
         ]
         if missing:
             raise KeyError(f"Missing market inputs: {', '.join(missing)}")
+        if open_ is None:
+            open_ = close
 
         device = self._state_device()
-        for value in (close, high, low, volume, open_):
-            if isinstance(value, torch.Tensor):
-                device = value.device
-                break
+        if not self._explicit_device:
+            for value in (close, high, low, volume, open_):
+                if isinstance(value, torch.Tensor):
+                    device = value.device
+                    break
 
         close = self._coerce_market_tensor("close", close, device)
         high = self._coerce_market_tensor("high", high, device)
@@ -832,6 +839,7 @@ class BatchedMultiCurrencyEnv:
         reward_mode: str = "log",
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
+        device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
         assert isinstance(B, int) and B > 0
@@ -843,6 +851,8 @@ class BatchedMultiCurrencyEnv:
         self.B = B
         self.N = N
         self.dtype = dtype
+        self._explicit_device = device is not None
+        self.device = torch.device(device) if device is not None else tau_p.device
         self.eps = float(eps)
         self.C0 = float(C0)
         self.bankruptcy_threshold = float(bankruptcy_threshold)
@@ -857,7 +867,7 @@ class BatchedMultiCurrencyEnv:
         self.o_fee = float(open_fee)
         self.c_fee = float(close_fee)
 
-        self.tau_p = tau_p.to(dtype)
+        self.tau_p = tau_p.to(device=self.device, dtype=dtype)
         self.M = self.tau_p.numel()
 
         self.state_dim = 4 * self.M * N + 9 * N + 8
@@ -893,7 +903,19 @@ class BatchedMultiCurrencyEnv:
     def _state_device(self) -> torch.device:
         if isinstance(self.C, torch.Tensor):
             return self.C.device
-        return self.tau_p.device
+        return self.device
+
+    def _coerce_market_tensor(self, name: str, value, device: torch.device) -> torch.Tensor:
+        value = torch.as_tensor(value, device=device, dtype=self.dtype)
+        expected_shape = (self.B, self.N)
+        if value.shape == expected_shape:
+            return value
+        if value.numel() == self.B * self.N:
+            return value.reshape(expected_shape)
+        raise ValueError(
+            f"{name} must have shape {expected_shape}, got {tuple(value.shape)}. "
+            f"Check that the environment N={self.N} matches the market data asset count."
+        )
 
     # -------------------------------------------------------------------------
     # action helpers
@@ -928,15 +950,18 @@ class BatchedMultiCurrencyEnv:
         if C0 is not None:
             self.C0 = float(C0)
         if open_ is None:
-            raise TypeError("BatchedMultiCurrencyEnv.reset requires an `open_` tensor.")
+            open_ = close
         B, N, M = self.B, self.N, self.M
 
-        device = close.device if isinstance(close, torch.Tensor) else self.tau_p.device
-        close  = close.to(device=device, dtype=self.dtype)
-        high   = high.to(device=device, dtype=self.dtype)
-        low    = low.to(device=device, dtype=self.dtype)
-        volume = volume.to(device=device, dtype=self.dtype)
-        open_  = open_.to(device=device, dtype=self.dtype)
+        if self._explicit_device:
+            device = self.device
+        else:
+            device = close.device if isinstance(close, torch.Tensor) else self.device
+        close  = self._coerce_market_tensor("close", close, device)
+        high   = self._coerce_market_tensor("high", high, device)
+        low    = self._coerce_market_tensor("low", low, device)
+        volume = self._coerce_market_tensor("volume", volume, device)
+        open_  = self._coerce_market_tensor("open_", open_, device)
         self.t = (
             time.to(device=device, dtype=torch.float64)
             if isinstance(time, torch.Tensor)
@@ -1056,9 +1081,11 @@ class BatchedMultiCurrencyEnv:
 
         return torch.cat([globals_block, asset_block.reshape(B, -1)], dim=1)
 
-    def _update(self, close, high, low, volume, time, open_):
+    def _update(self, close, high, low, volume, time, open_=None):
         self.V_prev = self.V.detach().clone()
         device = self._state_device()
+        if open_ is None:
+            open_ = close
         close  = close.to(device=device, dtype=self.dtype)
         high   = high.to(device=device, dtype=self.dtype)
         low    = low.to(device=device, dtype=self.dtype)
@@ -1253,7 +1280,7 @@ class BatchedMultiCurrencyEnv:
     # public step / mask
     # -------------------------------------------------------------------------
 
-    def step(self, actions, close, high, low, volume, time, open_):
+    def step(self, actions, close, high, low, volume, time, open_=None):
         """Returns obs (B, state_dim), rewards (B,), dones (B,)."""
         self._trade(actions)
         self._update(close, high, low, volume, time, open_)
