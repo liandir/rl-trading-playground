@@ -644,7 +644,7 @@ wheels = [
 [[package]]
 name = "forex"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/liandir/forex.git#e197de84660d69d30dd65361524bfb56b01671b8" }
+source = { git = "ssh://git@github.com/liandir/forex.git#2dfe03780dbdb90209f3fead795914a2b7d1ef24" }
 dependencies = [
     { name = "pandas" },
     { name = "requests" },
