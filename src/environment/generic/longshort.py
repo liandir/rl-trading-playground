@@ -1268,13 +1268,13 @@ class BatchedMultiCurrencyEnv:
     def _reward(self):
         has_realized = self.realized_cost.sum(dim=1) > self.eps
         roi = self.realized_pnl.sum(dim=1) / self.realized_cost.sum(dim=1).clamp(min=self.eps)
-        V      = self.V
+        V_curr = self.V
         V_prev = self.V_prev.clamp(min=self.eps)
         if self.reward_mode == "return":
-            baseline = self.val_coeff * (V - V_prev) / V_prev
+            baseline = (V_curr - V_prev) / V_prev
         else:
-            baseline = self.val_coeff * torch.log(V.clamp(min=self.eps) / V_prev)
-        return torch.where(has_realized, self.roi_coeff * roi, baseline)
+            baseline = torch.log(V_curr.clamp(min=self.eps) / V_prev)
+        return torch.where(has_realized, self.roi_coeff * roi, self.val_coeff * baseline)
 
     # -------------------------------------------------------------------------
     # public step / mask
