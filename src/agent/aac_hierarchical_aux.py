@@ -1,21 +1,24 @@
 import torch
-import torch.nn.functional as F
 
-from src.agent.discrete.aac import (
+from src.agent.utils import (
     _append_update_metrics,
+    _aux_loss,
+    _build_aux_target,
+    _close_from_historical,
     _compute_gae,
     _compute_mc,
     _empty_update_metrics,
     _fmt_sim_elapsed,
     _init_update_metrics,
     _sample_start_indices,
+    _unpack_policy_value_aux,
 )
-from src.agent.discrete.aac_hierarchical import (
+from src.agent.aac_hierarchical import (
     HierarchicalRolloutBuffer,
     _HierarchicalPolicyMixin,
     _resolve_historical_source,
 )
-from src.agent.discrete.network import build_network
+from src.agent.network import build_network
 
 
 class AuxiliaryHierarchicalRolloutBuffer(HierarchicalRolloutBuffer):
@@ -47,83 +50,8 @@ class AuxiliaryHierarchicalRolloutBuffer(HierarchicalRolloutBuffer):
         return states, actions, rewards, dones, masks, aux_targets
 
 
-def _unpack_policy_value_aux(output):
-    if not isinstance(output, tuple) or len(output) != 3:
-        raise ValueError(
-            "Auxiliary hierarchical agents require a network returning "
-            "(logits, values, aux). Use network type 'auxiliary_per_asset_action_value'."
-        )
-    return output
-
-
-def _close_from_historical(data):
-    if isinstance(data, torch.Tensor):
-        return data
-    return torch.stack([step["close"] for step in data])
-
-
-def _build_aux_target(close: torch.Tensor, index, horizons, *, reward=None, eps: float = 1e-12):
-    device = close.device
-    idx = torch.as_tensor(index, device=device, dtype=torch.long)
-    squeeze = idx.dim() == 0
-    if squeeze:
-        idx = idx.unsqueeze(0)
-
-    close_t = close.index_select(0, idx).clamp_min(eps)
-    ret_targets = []
-    vol_targets = []
-    for horizon in horizons:
-        h = int(horizon)
-        future = close.index_select(0, idx + h).clamp_min(eps)
-        ret_targets.append(torch.log(future / close_t))
-
-        one_step = []
-        for offset in range(1, h + 1):
-            prev = close.index_select(0, idx + offset - 1).clamp_min(eps)
-            nxt = close.index_select(0, idx + offset).clamp_min(eps)
-            one_step.append(torch.log(nxt / prev))
-        path_returns = torch.stack(one_step, dim=0)
-        vol_targets.append(path_returns.pow(2).mean(dim=0).sqrt())
-
-    target = {
-        "asset_ret": torch.stack(ret_targets, dim=-1),
-        "asset_vol": torch.stack(vol_targets, dim=-1),
-    }
-    if reward is not None:
-        target["reward"] = torch.as_tensor(reward, device=device, dtype=close.dtype)
-    if squeeze:
-        target = {key: value.squeeze(0) for key, value in target.items()}
-    return target
-
-
-def _aux_loss(
-    aux: dict[str, torch.Tensor],
-    aux_targets: dict[str, torch.Tensor] | None,
-    rewards: torch.Tensor,
-    coefs: dict[str, float],
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    losses = {}
-    total = rewards.new_zeros(())
-
-    reward_target = aux_targets.get("reward", rewards) if aux_targets is not None else rewards
-    if "reward" in aux:
-        losses["aux_reward_loss"] = F.smooth_l1_loss(aux["reward"], reward_target.detach())
-        total = total + float(coefs.get("reward", 1.0)) * losses["aux_reward_loss"]
-
-    if aux_targets is not None and "asset_ret" in aux and "asset_ret" in aux_targets:
-        losses["aux_asset_ret_loss"] = F.smooth_l1_loss(aux["asset_ret"], aux_targets["asset_ret"].detach())
-        total = total + float(coefs.get("asset_ret", 0.5)) * losses["aux_asset_ret_loss"]
-
-    if aux_targets is not None and "asset_vol" in aux and "asset_vol" in aux_targets:
-        losses["aux_asset_vol_loss"] = F.mse_loss(aux["asset_vol"], aux_targets["asset_vol"].detach())
-        total = total + float(coefs.get("asset_vol", 0.25)) * losses["aux_asset_vol_loss"]
-
-    losses["aux_loss"] = total
-    return total, losses
-
-
-class RecurrentHierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
-    """Recurrent hierarchical AAC with supervised reward/return/volatility heads."""
+class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
+    """Sequence-capable hierarchical AAC with supervised reward/return/volatility heads."""
 
     def __init__(
         self,
@@ -215,7 +143,7 @@ class RecurrentHierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
 
             advantages = raw_adv
             if self.normalize_advantages:
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
+                advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-7)
 
         return advantages, raw_adv, returns, states, actions, rewards, masks, aux_targets
 
@@ -284,11 +212,11 @@ class RecurrentHierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         store_results=True,
         max_grad_norm=None,
         *,
+        open_=None,
         high=None,
         low=None,
         volume=None,
         times=None,
-        open_=None,
     ):
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
@@ -389,7 +317,7 @@ class RecurrentHierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
     def train_on_historical_bat(
         self,
         bat_env,
-        close, high, low, volume, times, open_,
+        open_, close, high, low, volume, times,
         n_episodes,
         max_steps=2000,
         warm_up=0,
@@ -511,13 +439,3 @@ class RecurrentHierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
             print(msg)
 
         return total_loss, total_reward
-
-
-HierarchicalAuxAACAgent = RecurrentHierarchicalAuxAACAgent
-
-
-__all__ = [
-    "AuxiliaryHierarchicalRolloutBuffer",
-    "HierarchicalAuxAACAgent",
-    "RecurrentHierarchicalAuxAACAgent",
-]

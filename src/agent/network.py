@@ -5,7 +5,7 @@ from src.network.vanilla import VanillaNetwork
 from src.network.recurrent import RecurrentNetwork, _build_recurrent_cell
 
 
-class ActionValueNetwork(torch.nn.Module):
+class _FeedForwardActionValueNetwork(torch.nn.Module):
     """Shared feedforward trunk with categorical-policy and scalar-value heads."""
 
     name = "action_value"
@@ -46,11 +46,24 @@ class ActionValueNetwork(torch.nn.Module):
         values = self.value(z).squeeze(-1).view(*shape[:-1])
         return logits, values
 
+    def reset(self, batch_size: int = 1):
+        return None
 
-class RecurrentActionValueNetwork(torch.nn.Module):
+    def forward_seq(self, x_seq):
+        return self.forward(x_seq)
+
+    def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        return {}
+
+    def set_states(self, states: dict | None, clone: bool = True, detach: bool = True, strict: bool = True):
+        if strict and states not in ({}, None):
+            raise ValueError("Feedforward ActionValueNetwork has no recurrent state.")
+
+
+class ActionValueNetwork(torch.nn.Module):
     """Shared recurrent trunk with categorical-policy and scalar-value heads."""
 
-    name = "recurrent_action_value"
+    name = "action_value"
 
     def __init__(
         self,
@@ -147,7 +160,7 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         self.value.set_states(v_states, clone=clone, detach=detach, strict=strict)
 
 
-class ActionQNetwork(torch.nn.Module):
+class _FeedForwardActionQNetwork(torch.nn.Module):
     """Shared feedforward trunk with categorical-policy and discrete-Q heads."""
 
     name = "action_q"
@@ -187,16 +200,32 @@ class ActionQNetwork(torch.nn.Module):
         )
 
     def forward(self, x):
+        shape = x.shape
         z = x.view(-1, self.state_dim)
         for layer in self.layers:
             z = self.activation(layer(z))
-        return self.actor(z), self.q_head(z)
+        logits = self.actor(z).view(*shape[:-1], self.action_dim)
+        q_values = self.q_head(z).view(*shape[:-1], self.action_dim)
+        return logits, q_values
+
+    def reset(self, batch_size: int = 1):
+        return None
+
+    def forward_seq(self, x_seq):
+        return self.forward(x_seq)
+
+    def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        return {}
+
+    def set_states(self, states: dict | None, clone: bool = True, detach: bool = True, strict: bool = True):
+        if strict and states not in ({}, None):
+            raise ValueError("Feedforward ActionQNetwork has no recurrent state.")
 
 
-class RecurrentActionQNetwork(torch.nn.Module):
+class ActionQNetwork(torch.nn.Module):
     """Shared recurrent trunk with categorical-policy and discrete-Q heads."""
 
-    name = "recurrent_action_q"
+    name = "action_q"
 
     def __init__(
         self,
@@ -874,7 +903,9 @@ class AuxiliaryPerAssetActionValueNetwork(FlatPerAssetActionValueNetwork):
     """
     ``FlatPerAssetActionValueNetwork`` plus supervised predictive heads.
 
-    Public inference returns ``(logits, values, aux)`` where ``aux`` contains:
+    Public inference returns ``(logits, critic, aux)`` where ``critic`` is a
+    scalar value by default or per-action Q-values when ``critic_type="q"``,
+    and ``aux`` contains:
         reward    : (...,)
         asset_ret : (..., num_assets, aux_horizons)
         asset_vol : (..., num_assets, aux_horizons)
@@ -887,10 +918,17 @@ class AuxiliaryPerAssetActionValueNetwork(FlatPerAssetActionValueNetwork):
         *args,
         aux_horizons=(1, 5, 20),
         hidden_dims_aux=None,
+        critic_type: str = "v",
         **kwargs,
     ):
+        critic_type = str(critic_type).lower()
+        if critic_type not in ("v", "q"):
+            raise ValueError(f"critic_type must be 'v' or 'q', got '{critic_type}'.")
+        hidden_dims_value = kwargs.get("hidden_dims_value", None)
         super().__init__(*args, **kwargs)
         hidden_dims_aux = hidden_dims_aux or []
+        hidden_dims_value = hidden_dims_value or []
+        self.critic_type = critic_type
         self.aux_horizons = tuple(int(h) for h in aux_horizons)
         if len(self.aux_horizons) < 1:
             raise ValueError("aux_horizons must contain at least one horizon.")
@@ -899,6 +937,13 @@ class AuxiliaryPerAssetActionValueNetwork(FlatPerAssetActionValueNetwork):
         self.n_aux_horizons = len(self.aux_horizons)
 
         head_in = self.d_mem if self.combine_mode == "add" else self.d_mem + self.d_ff
+        if self.critic_type == "q":
+            self.value = VanillaNetwork(
+                head_in,
+                self.action_dim,
+                hidden_dims=hidden_dims_value,
+                activation=self.activation,
+            )
         self.aux_reward = VanillaNetwork(head_in, 1, hidden_dims=hidden_dims_aux, activation=self.activation)
         self.aux_asset_ret = VanillaNetwork(
             head_in,
@@ -922,6 +967,12 @@ class AuxiliaryPerAssetActionValueNetwork(FlatPerAssetActionValueNetwork):
             ),
         }
 
+    def _critic(self, h: torch.Tensor, prefix_shape: torch.Size) -> torch.Tensor:
+        critic = self.value(h)
+        if self.critic_type == "q":
+            return critic.reshape(prefix_shape + (self.action_dim,))
+        return critic.squeeze(-1).reshape(prefix_shape)
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
         shape = x.shape
         x_flat = x.reshape(-1, self.state_dim)
@@ -931,7 +982,7 @@ class AuxiliaryPerAssetActionValueNetwork(FlatPerAssetActionValueNetwork):
         h = self._combine(h_mem, h_ff)
 
         logits = self.actor(h).reshape(shape[:-1] + (self.action_dim,))
-        values = self.value(h).squeeze(-1).reshape(shape[:-1])
+        values = self._critic(h, shape[:-1])
         aux_flat = self._build_aux(h)
         aux = {
             "reward": aux_flat["reward"].reshape(shape[:-1]),
@@ -970,7 +1021,10 @@ class AuxiliaryPerAssetActionValueNetwork(FlatPerAssetActionValueNetwork):
         h_flat = h_seq.reshape(T * B, -1)
 
         logits_seq = self.actor(h_flat).view(T, B, self.action_dim)
-        values_seq = self.value(h_flat).squeeze(-1).view(T, B)
+        if self.critic_type == "q":
+            values_seq = self.value(h_flat).view(T, B, self.action_dim)
+        else:
+            values_seq = self.value(h_flat).squeeze(-1).view(T, B)
         aux_flat = self._build_aux(h_flat)
         aux_seq = {
             "reward": aux_flat["reward"].view(T, B),
@@ -985,18 +1039,22 @@ class AuxiliaryPerAssetActionValueNetwork(FlatPerAssetActionValueNetwork):
         return logits_seq, values_seq, aux_seq
 
 
+RecurrentActionValueNetwork = ActionValueNetwork
+RecurrentActionQNetwork = ActionQNetwork
+
+
 NETWORK_REGISTRY: dict[str, type[torch.nn.Module]] = {
     cls.name: cls
     for cls in (
         ActionValueNetwork,
-        RecurrentActionValueNetwork,
         ActionQNetwork,
-        RecurrentActionQNetwork,
         AttentionMemoryActionValueNetwork,
         FlatPerAssetActionValueNetwork,
         AuxiliaryPerAssetActionValueNetwork,
     )
 }
+NETWORK_REGISTRY["recurrent_action_value"] = ActionValueNetwork
+NETWORK_REGISTRY["recurrent_action_q"] = ActionQNetwork
 
 
 def build_network(network: dict) -> torch.nn.Module:

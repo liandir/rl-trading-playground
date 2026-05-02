@@ -23,6 +23,21 @@ class VanillaNetwork(torch.nn.Module):
         for layer in self.layers:
             z = self.activation(layer(z))
         return self.out_act(self.out(z))
+
+    def reset(self, batch_size: int = 1, device=None, dtype=None):
+        return None
+
+    def forward_seq(self, x_seq):
+        shape = x_seq.shape
+        y = self.forward(x_seq.reshape(-1, self.n_in))
+        return y.reshape(*shape[:-1], self.n_out)
+
+    def get_states(self, clone: bool = True, detach: bool = True):
+        return {}
+
+    def set_states(self, states, clone: bool = True, detach: bool = True, strict: bool = True):
+        if strict and states not in ({}, None):
+            raise ValueError("VanillaNetwork has no recurrent state.")
     
 
 class ActionValueNetwork(torch.nn.Module):
@@ -79,6 +94,23 @@ class ActionValueNetwork(torch.nn.Module):
     def av(self, x):
         z = self.forward(x)
         return self.actor(z), self.value(z)
+
+    def reset(self, batch_size: int = 1, device=None, dtype=None):
+        return None
+
+    def forward_seq(self, x_seq):
+        shape = x_seq.shape
+        z = self.forward(x_seq.reshape(-1, self.state_dim))
+        actor = self.actor(z).reshape(*shape[:-1], self.action_dim)
+        value = self.value(z).reshape(*shape[:-1], 1)
+        return actor, value
+
+    def get_states(self, clone: bool = True, detach: bool = True):
+        return {}
+
+    def set_states(self, states, clone: bool = True, detach: bool = True, strict: bool = True):
+        if strict and states not in ({}, None):
+            raise ValueError("ActionValueNetwork has no recurrent state.")
 
 
 class VanillaQNetwork(VanillaNetwork):

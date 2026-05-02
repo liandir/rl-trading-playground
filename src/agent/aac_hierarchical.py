@@ -1,17 +1,20 @@
 import torch
 from torch import distributions
 
-from src.agent.discrete.aac import (
+from src.agent.utils import (
     _append_update_metrics,
     _compute_gae,
     _compute_mc,
     _empty_update_metrics,
     _fmt_sim_elapsed,
+    _gather_per_asset_mask,
     _init_update_metrics,
+    _resolve_historical_source,
     _sample_start_indices,
+    _split_logits,
     apply_action_mask,
 )
-from src.agent.discrete.network import build_network
+from src.agent.network import build_network
 
 
 # ---------------------------------------------------------------------------
@@ -67,108 +70,6 @@ class HierarchicalRolloutBuffer:
                 "sell":    torch.stack(self.masks_sell).to(device=device),
             }
         return states, actions, rewards, dones, masks
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _gather_per_asset_mask(mask: torch.Tensor, asset_idx: torch.Tensor) -> torch.Tensor:
-    """
-    mask       : (..., N, K) bool
-    asset_idx  : (...)        long
-    returns    : (..., K)     bool   per-state slice mask[..., asset_idx, :]
-    """
-    expected_ndim = asset_idx.ndim + 2
-    while mask.ndim < expected_ndim:
-        mask = mask.unsqueeze(mask.ndim - 2)
-    if mask.ndim != expected_ndim:
-        raise ValueError(
-            f"Expected mask ndim {expected_ndim} for asset_idx shape {tuple(asset_idx.shape)}, "
-            f"got {mask.ndim}."
-        )
-    K = mask.shape[-1]
-    idx = asset_idx.unsqueeze(-1).unsqueeze(-1).expand(*asset_idx.shape, 1, K)
-    return mask.gather(-2, idx).squeeze(-2)
-
-
-def _split_logits(logits: torch.Tensor, primary_dim: int, K: int):
-    logits_d = logits[..., :primary_dim]
-    logits_buy = logits[..., primary_dim:primary_dim + K]
-    logits_sell = logits[..., primary_dim + K:primary_dim + 2 * K]
-    return logits_d, logits_buy, logits_sell
-
-
-def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=None, open_=None):
-    """
-    Normalize historical inputs for single-environment training.
-
-    Supports either:
-    - ``data`` as a sequence of per-step dicts with keys
-      ``close/high/low/volume/open/time``, or
-    - ``data`` as the ``close`` tensor together with keyword tensors
-      ``high``, ``low``, ``volume``, ``times``, and ``open_``.
-    """
-    if isinstance(data, torch.Tensor):
-        close = data
-        missing = [
-            name for name, value in (
-                ("high", high),
-                ("low", low),
-                ("volume", volume),
-                ("times", times),
-                ("open_", open_),
-            )
-            if value is None
-        ]
-        if missing:
-            raise KeyError(
-                "Tensor historical input requires keyword tensors for "
-                + ", ".join(missing)
-                + "."
-            )
-
-        tensors = {
-            "close": close,
-            "high": high,
-            "low": low,
-            "volume": volume,
-            "times": times,
-            "open_": open_,
-        }
-        T = int(close.shape[0])
-        for name, value in tensors.items():
-            if not isinstance(value, torch.Tensor):
-                raise TypeError(f"{name} must be a torch.Tensor, got {type(value).__name__}.")
-            if value.shape[0] != T:
-                raise ValueError(f"{name} must have leading dimension {T}, got {value.shape[0]}.")
-
-        def time_at(idx: int) -> float:
-            return float(times[idx])
-
-        def reset_env(env, idx: int):
-            return env.reset(close[idx], high[idx], low[idx], volume[idx], times[idx], open_=open_[idx])
-
-        def step_env(env, action, idx: int):
-            return env.step(action, close[idx], high[idx], low[idx], volume[idx], times[idx], open_[idx])
-
-        return T, time_at, reset_env, step_env
-
-    if any(value is not None for value in (high, low, volume, times)):
-        raise ValueError("Pass either list-of-dicts historical data or raw tensors, not both.")
-
-    T = len(data)
-
-    def time_at(idx: int) -> float:
-        return float(data[idx]["time"])
-
-    def reset_env(env, idx: int):
-        return env.reset(data[idx])
-
-    def step_env(env, action, idx: int):
-        return env.step(action, data=data[idx])
-
-    return T, time_at, reset_env, step_env
 
 
 # ---------------------------------------------------------------------------
@@ -351,403 +252,8 @@ class _HierarchicalPolicyMixin:
 
 # ---------------------------------------------------------------------------
 # HierarchicalAACAgent (feedforward)
-# ---------------------------------------------------------------------------
-
 class HierarchicalAACAgent(_HierarchicalPolicyMixin):
-    """
-    Feedforward Advantage Actor-Critic for the hierarchical
-    (primary direction, size bucket) action factorisation.
-
-    The actor produces ``1 + 3N + 2K`` logits, split as:
-        - primary    : (1 + 3N)   {hold, buy_i, sell_i, close_i}
-        - buy_bucket : (K)        size bucket distribution conditional on buying
-        - sell_bucket: (K)        size bucket distribution conditional on selling
-
-    Loss is the standard AAC objective with:
-        log pi(a|s) = log pi_d(a_d|s) + 1[buy]·log pi_buy(a_q|s) + 1[sell]·log pi_sell(a_q|s)
-        H(s)        = H_d/log Kd + P_buy·H_buy/log K + P_sell·H_sell/log K
-    """
-
-    def __init__(
-        self,
-        network: dict,
-        n_assets: int,
-        n_buckets: int,
-        gamma: float = 0.999,
-        vf_coef: float = 0.5,
-        ent_coef: float = 0.01,
-        normalize_advantages: bool = True,
-        advantage_type: str = "td0",
-        gae_lambda: float = 0.95,
-        dtype: torch.dtype = torch.float32,
-        device: str = "cpu",
-    ):
-        if advantage_type not in ("td0", "gae", "mc"):
-            raise ValueError(f"advantage_type must be 'td0', 'gae', or 'mc', got '{advantage_type}'.")
-        self.gamma                = gamma
-        self.vf_coef              = vf_coef
-        self.ent_coef             = ent_coef
-        self.normalize_advantages = normalize_advantages
-        self.advantage_type       = advantage_type
-        self.gae_lambda           = gae_lambda
-        self.dtype                = dtype
-        self.device               = torch.device(device)
-
-        self.n_assets    = int(n_assets)
-        self.K           = int(n_buckets)
-        self.primary_dim = 1 + 3 * self.n_assets
-
-        self.net = build_network(network).to(device=self.device, dtype=self.dtype)
-        expected = self.primary_dim + 2 * self.K
-        if int(self.net.action_dim) != expected:
-            raise ValueError(
-                f"Network action_dim must equal 1 + 3*N + 2*K = {expected}, got {self.net.action_dim}."
-            )
-        self.state_dim  = getattr(self.net, "state_dim", None)
-        self.action_dim = self.net.action_dim
-
-        self.buffer = HierarchicalRolloutBuffer()
-
-    # ------------------------------------------------------------------
-
-    def act(
-        self,
-        state: torch.Tensor,
-        mask: dict | None = None,
-        explore: bool = False,
-        grad_enabled: bool = False,
-    ) -> torch.Tensor:
-        with torch.set_grad_enabled(grad_enabled):
-            state = state.to(dtype=self.dtype, device=self.device)
-            logits, _ = self.net(state)
-            mask_dev = None
-            if mask is not None:
-                mask_dev = {k: v.to(self.device) for k, v in mask.items()}
-            action = self._sample_hierarchical(logits, mask_dev, explore)
-        if grad_enabled:
-            return action
-        return action.cpu()
-
-    def store(self, state, action, reward, done, mask=None):
-        self.buffer.store(state, action, reward, done, mask=mask)
-
-    def init_optimizer(self, lr, optim="AdamW"):
-        opt_cls    = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
-        self.optim = opt_cls(self.net.parameters(), lr=lr)
-
-    def compute_advantages(self, last_next_state: torch.Tensor):
-        states, actions, rewards, dones, masks = self.buffer.to_tensors(self.device, self.dtype)
-        rewards = rewards.squeeze(-1) if rewards.dim() > actions.dim() - 1 else rewards
-        dones   = dones.squeeze(-1)   if dones.dim()   > actions.dim() - 1 else dones
-
-        with torch.no_grad():
-            last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
-            all_states = torch.cat([states, last_next_state[None]], dim=0)
-            _, values_all = self.net(all_states)
-
-            v_t   = values_all[:-1]
-            v_tp1 = values_all[1:]
-
-            if self.advantage_type == "gae":
-                raw_adv, returns = _compute_gae(rewards, dones, v_t, v_tp1, self.gamma, self.gae_lambda)
-            elif self.advantage_type == "mc":
-                raw_adv, returns = _compute_mc(rewards, dones, v_t, v_tp1[-1], self.gamma)
-            else:
-                returns = rewards + self.gamma * (1.0 - dones) * v_tp1
-                raw_adv = returns - v_t
-
-            advantages = raw_adv
-            if self.normalize_advantages:
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
-
-        return advantages, raw_adv, returns, states, actions, masks
-
-    def update(
-        self,
-        last_next_state: torch.Tensor,
-        max_grad_norm: float | None = None,
-    ) -> dict[str, list[float]]:
-        if not hasattr(self, "optim") or self.optim is None:
-            raise RuntimeError("Call init_optimizer(...) before update().")
-        if len(self.buffer) == 0:
-            return _empty_update_metrics()
-
-        metrics = _init_update_metrics()
-        advantages, raw_adv, returns, states, actions, masks = self.compute_advantages(last_next_state)
-
-        logits, values = self.net(states)
-        log_probs, entropy, primary_logits_m = self._policy_terms(logits, actions, masks)
-
-        adv              = advantages.detach()
-        policy_objective = (log_probs * adv).mean()
-        value_loss       = 0.5 * (returns.detach() - values).pow(2).mean()
-        loss             = -policy_objective + self.vf_coef * value_loss - self.ent_coef * entropy
-
-        self.optim.zero_grad(set_to_none=True)
-        loss.backward()
-        if max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_grad_norm)
-        self.optim.step()
-
-        _append_update_metrics(
-            metrics,
-            logits=primary_logits_m,
-            log_probs=log_probs,
-            values=values,
-            returns=returns,
-            raw_advantages=raw_adv,
-            policy_objective=policy_objective,
-            value_loss=value_loss,
-            entropy=entropy,
-            loss=loss,
-        )
-
-        return metrics
-
-    def save(self, path: str):
-        torch.save({"network": self.net.state_dict()}, path)
-
-    def load(self, path: str, strict: bool = True):
-        ckpt = torch.load(path, map_location=self.device)
-        self.net.load_state_dict(ckpt["network"], strict=strict)
-
-    # ------------------------------------------------------------------
-    # Training loops
-    # ------------------------------------------------------------------
-
-    def train_on_historical(
-        self,
-        env,
-        data,
-        n_episodes,
-        max_steps=2000,
-        warm_up=0,
-        update_interval=100,
-        lr=3e-4,
-        optim="AdamW",
-        init_optimizer=False,
-        store_results=True,
-        max_grad_norm=None,
-        *,
-        high=None,
-        low=None,
-        volume=None,
-        times=None,
-        open_=None,
-    ):
-        if not hasattr(self, "optim") or init_optimizer:
-            self.init_optimizer(lr, optim=optim)
-
-        T, time_at, reset_env, step_env = _resolve_historical_source(
-            data,
-            high=high,
-            low=low,
-            volume=volume,
-            times=times,
-            open_=open_,
-        )
-        total_reward = []
-        total_loss   = []
-        total_info   = []
-
-        for episode in range(1, n_episodes + 1):
-            start  = int(_sample_start_indices(T, max_steps).item())
-            sim_t0 = time_at(start)
-            state  = reset_env(env, start)
-            self.buffer.clear()
-
-            if store_results:
-                episode_reward = []
-                episode_info   = []
-                episode_loss   = []
-
-            step = 1
-            while True:
-                mask = env.valid_action_mask() if step > warm_up else None
-
-                if step > warm_up:
-                    action = self.act(state.to_tensor(), mask=mask, explore=True, grad_enabled=False)
-                else:
-                    action = None
-
-                next_state, reward, done, info = step_env(env, action, start + step)
-
-                if store_results:
-                    episode_reward.append(reward)
-                    episode_info.append(info)
-
-                if step > warm_up:
-                    self.store(
-                        state.to_tensor().detach(),
-                        action.detach(),
-                        torch.tensor(reward, dtype=env.dtype if hasattr(env, "dtype") else torch.float32),
-                        torch.tensor(done,   dtype=env.dtype if hasattr(env, "dtype") else torch.float32),
-                        mask=mask,
-                    )
-
-                    rollout_ready = len(self.buffer) >= update_interval
-                    terminal      = done or (step >= max_steps)
-
-                    if (rollout_ready or terminal) and len(self.buffer) > 2:
-                        loss_dict = self.update(
-                            last_next_state=next_state.to_tensor(),
-                            max_grad_norm=max_grad_norm,
-                        )
-                        self.buffer.clear()
-                        if store_results:
-                            episode_loss.append(loss_dict)
-
-                        msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
-                        for key, val in loss_dict.items():
-                            msg += f" - {key}: {sum(val) / len(val):.5f}"
-                        print(msg, end="\r")
-
-                    if terminal:
-                        break
-                else:
-                    if step % update_interval == 1:
-                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - warm up in progress...", end="\r")
-
-                state = next_state
-                step += 1
-
-            if store_results:
-                total_loss.append(episode_loss)
-                total_reward.append(episode_reward)
-                total_info.append(episode_info)
-
-            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
-            if store_results and len(episode_loss) > 0:
-                keys = episode_loss[0].keys()
-                for key in keys:
-                    msg += f" - {key}: {sum(sum(ld[key]) / len(ld[key]) for ld in episode_loss) / len(episode_loss):.5f}"
-            print(msg)
-
-        return total_loss, total_reward, total_info
-
-    def train_on_historical_bat(
-        self,
-        bat_env,
-        close, high, low, volume, times, open_,
-        n_episodes,
-        max_steps=2000,
-        warm_up=0,
-        update_interval=100,
-        lr=3e-4,
-        optim="AdamW",
-        init_optimizer=False,
-        store_results=True,
-        max_grad_norm=None,
-    ):
-        if not hasattr(self, "optim") or init_optimizer:
-            self.init_optimizer(lr, optim=optim)
-
-        B     = bat_env.B
-        dtype = bat_env.dtype
-        T     = close.shape[0]
-
-        total_loss   = []
-        total_reward = []
-
-        for episode in range(1, n_episodes + 1):
-            starts = _sample_start_indices(T, max_steps, batch_size=B)
-            sim_t0 = float(times[starts[0]])
-            obs    = bat_env.reset(
-                close[starts], high[starts], low[starts], volume[starts], times[starts],
-                open_=open_[starts],
-            )
-            self.buffer.clear()
-
-            if store_results:
-                ep_reward = [[] for _ in range(B)]
-                ep_loss   = []
-
-            step = 1
-            while step <= max_steps:
-                si = starts + step
-                mask = bat_env.valid_action_mask() if step > warm_up else None
-
-                if step > warm_up:
-                    actions      = self.act(obs, mask=mask, explore=True, grad_enabled=False)
-                    step_actions = actions
-                else:
-                    actions      = None
-                    step_actions = (
-                        torch.zeros(B, dtype=torch.long),
-                        torch.zeros(B, dtype=torch.long),
-                    )
-
-                next_obs, rewards, dones = bat_env.step(
-                    step_actions, close[si], high[si], low[si], volume[si], times[si], open_[si],
-                )
-
-                if store_results and actions is not None:
-                    for i in range(B):
-                        ep_reward[i].append(float(rewards[i]))
-
-                terminal = bool(dones.any()) or step >= max_steps
-
-                if step > warm_up:
-                    self.buffer.store(
-                        obs.detach(),
-                        actions.detach(),
-                        rewards.to(dtype=dtype),
-                        dones.to(dtype=dtype),
-                        mask=mask,
-                    )
-
-                    rollout_ready = len(self.buffer) >= update_interval
-
-                    if (rollout_ready or terminal) and len(self.buffer) > 2:
-                        loss_dict = self.update(
-                            last_next_state=next_obs,
-                            max_grad_norm=max_grad_norm,
-                        )
-                        self.buffer.clear()
-                        if store_results:
-                            ep_loss.append(loss_dict)
-
-                        msg = (
-                            f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}]"
-                            f" - avg. reward: {rewards.mean():.5f}"
-                            f" - avg. portfolio: {bat_env.V.mean():.2f}"
-                        )
-                        for key, val in loss_dict.items():
-                            msg += f" - {key}: {sum(val) / len(val):.5f}"
-                        print(msg, end="\r")
-
-                    if terminal:
-                        break
-                else:
-                    if terminal:
-                        break
-                    if step % update_interval == 1:
-                        print(f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}] - warm up in progress...", end="\r")
-
-                obs  = next_obs
-                step += 1
-
-            if store_results:
-                total_loss.append(ep_loss)
-                total_reward.append(ep_reward)
-
-            all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
-            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}] - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f} - avg. portfolio: {bat_env.V.mean():.2f}"
-            if store_results and len(ep_loss) > 0:
-                keys = ep_loss[0].keys()
-                for key in keys:
-                    msg += f" - {key}: {sum(sum(ld[key]) / len(ld[key]) for ld in ep_loss) / len(ep_loss):.5f}"
-            print(msg)
-
-        return total_loss, total_reward
-
-
-# ---------------------------------------------------------------------------
-# RecurrentHierarchicalAACAgent
-# ---------------------------------------------------------------------------
-
-class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
-    """Recurrent counterpart of HierarchicalAACAgent (mirrors RecurrentAACAgent)."""
+    """Sequence-capable hierarchical AAC agent."""
 
     def __init__(
         self,
@@ -848,7 +354,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
 
             advantages = raw_adv
             if self.normalize_advantages:
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
+                advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-7)
 
         return advantages, raw_adv, returns, states, actions, masks
 
@@ -1031,7 +537,7 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
     def train_on_historical_bat(
         self,
         bat_env,
-        close, high, low, volume, times, open_,
+        open_, close, high, low, volume, times, 
         n_episodes,
         max_steps=2000,
         warm_up=0,
@@ -1160,10 +666,3 @@ class RecurrentHierarchicalAACAgent(_HierarchicalPolicyMixin):
             print(msg)
 
         return total_loss, total_reward
-
-
-__all__ = [
-    "HierarchicalRolloutBuffer",
-    "HierarchicalAACAgent",
-    "RecurrentHierarchicalAACAgent",
-]
