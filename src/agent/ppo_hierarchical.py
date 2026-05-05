@@ -10,7 +10,7 @@ from src.agent.ppo import (
     _empty_update_metrics,
     _init_update_metrics,
 )
-from src.agent.utils import _compute_gae, _compute_mc
+from src.agent.utils import _compute_gae, _compute_mc, _fmt_sim_elapsed, _sample_start_indices
 
 
 class HierarchicalPPORolloutBuffer(HierarchicalRolloutBuffer):
@@ -171,3 +171,128 @@ class HierarchicalPPOAgent(_HierarchicalPolicyMixin):
         ckpt = torch.load(path, map_location=self.device)
         self.net.load_state_dict(ckpt["network"], strict=strict)
 
+    def train_on_historical_bat(
+        self,
+        bat_env,
+        close, high, low, volume, times, open_,
+        n_episodes,
+        max_steps=2000,
+        warm_up=0,
+        update_interval=100,
+        n_updates=4,
+        burn_in_updates=1,
+        lr=3e-4,
+        optim="AdamW",
+        init_optimizer=False,
+        store_results=True,
+        max_grad_norm=None,
+    ):
+        if not hasattr(self, "optim") or init_optimizer:
+            self.init_optimizer(lr, optim=optim)
+
+        B = bat_env.B
+        dtype = bat_env.dtype
+        T = close.shape[0]
+        total_loss = []
+        total_reward = []
+
+        for episode in range(1, n_episodes + 1):
+            self.net.reset(B)
+            h0 = self.net.get_states(clone=True, detach=True)
+            burn_in = burn_in_updates
+
+            starts = _sample_start_indices(T, max_steps, batch_size=B)
+            sim_t0 = float(times[starts[0]])
+            obs = bat_env.reset(
+                close[starts], high[starts], low[starts], volume[starts], times[starts],
+                open_=open_[starts],
+            )
+            self.buffer.clear()
+
+            if store_results:
+                ep_reward = [[] for _ in range(B)]
+                ep_loss = []
+
+            step = 1
+            while step <= max_steps:
+                si = starts + step
+                mask = bat_env.valid_action_mask() if step > warm_up else None
+                if step > warm_up:
+                    actions, log_probs = self.act(obs, mask=mask, explore=True, grad_enabled=False)
+                    step_actions = actions
+                else:
+                    actions = None
+                    log_probs = None
+                    step_actions = (torch.zeros(B, dtype=torch.long), torch.zeros(B, dtype=torch.long))
+
+                next_obs, rewards, dones = bat_env.step(
+                    step_actions, close[si], high[si], low[si], volume[si], times[si], open_[si],
+                )
+
+                if store_results and actions is not None:
+                    for i in range(B):
+                        ep_reward[i].append(float(rewards[i]))
+
+                terminal = bool(dones.any()) or step >= max_steps
+                if step > warm_up:
+                    self.buffer.store(
+                        obs.detach(),
+                        actions.detach(),
+                        log_probs.detach(),
+                        rewards.to(dtype=dtype),
+                        dones.to(dtype=dtype),
+                        mask=mask,
+                    )
+
+                    rollout_ready = len(self.buffer) >= update_interval
+                    if (rollout_ready or terminal) and len(self.buffer) > 2:
+                        h_t = self.net.get_states(clone=True, detach=True)
+                        if burn_in > 0:
+                            burn_in -= 1
+                        else:
+                            loss_dict = self.update(
+                                next_obs,
+                                k_epochs=n_updates,
+                                h0=h0,
+                                max_grad_norm=max_grad_norm,
+                            )
+                            if store_results:
+                                ep_loss.append(loss_dict)
+                            msg = (
+                                f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}]"
+                                f" - avg. reward: {rewards.mean():.5f}"
+                                f" - avg. portfolio: {bat_env.V.mean():.2f}"
+                            )
+                            for key, val in loss_dict.items():
+                                msg += f" - {key}: {sum(val) / len(val):.5f}"
+                            print(msg, end="\r")
+                        self.net.set_states(h0 := h_t, clone=True, detach=True)
+                        self.buffer.clear()
+                    if terminal:
+                        break
+                else:
+                    if step % update_interval == 1:
+                        print(
+                            f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}] - warm up in progress...",
+                            end="\r",
+                        )
+
+                obs = next_obs
+                step += 1
+
+            if store_results:
+                total_loss.append(ep_loss)
+                total_reward.append(ep_reward)
+
+            all_ep_rewards = [r for env_r in ep_reward for r in env_r] if store_results else []
+            msg = (
+                f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(float(times[starts[0] + step]) - sim_t0)}]"
+                f" - avg. reward: {sum(all_ep_rewards) / max(1, len(all_ep_rewards)):.5f}"
+                f" - avg. portfolio: {bat_env.V.mean():.2f}"
+            )
+            if store_results and len(ep_loss) > 0:
+                for key in ep_loss[0].keys():
+                    msg += f" - {key}: {sum(sum(ld[key]) / len(ld[key]) for ld in ep_loss) / len(ep_loss):.5f}"
+            print(msg)
+
+        return total_loss, total_reward
