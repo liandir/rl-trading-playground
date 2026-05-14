@@ -563,9 +563,9 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         if h0 is not None:
             self.net.set_states(h0, strict=False)
         all_states = torch.cat([states, last_next_state[None]], dim=0)
-        z_all = self.net.encode(all_states)
+        z_all = self.net.encode(all_states).detach()
         z_t = z_all[:-1]
-        z_tp1 = z_all[1:].detach()
+        z_tp1 = z_all[1:]
 
         if h0 is not None:
             self.net.set_states(h0, strict=False)
