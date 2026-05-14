@@ -18,46 +18,29 @@ from src.agent.aac_hierarchical import (
     _HierarchicalPolicyMixin,
     _resolve_historical_source,
 )
-from src.agent.network import build_network
+from src.agent.aac_hierarchical_aux import AuxiliaryHierarchicalRolloutBuffer
+from src.agent.network import build_network, SpatiotemporalAuxiliaryPerAssetActionValueNetwork
 
 
-class AuxiliaryHierarchicalRolloutBuffer(HierarchicalRolloutBuffer):
-    """Hierarchical rollout buffer with optional per-step auxiliary targets."""
+class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
+    """
+    Hierarchical AAC agent tailored for SpatiotemporalAuxiliaryPerAssetActionValueNetwork.
 
-    def clear(self):
-        super().clear()
-        self.aux_targets = []
-        self._has_aux_targets = None
+    Maintains a rolling ``context_length``-observation buffer that is prepended
+    to every ``forward_seq`` call during training. This gives causal temporal
+    attention at rollout position t=0 a proper historical view rather than
+    starting from an empty context.
 
-    def store(self, state, action, reward, done, mask=None, aux_target=None):
-        super().store(state, action, reward, done, mask=mask)
-        if self._has_aux_targets is None:
-            self._has_aux_targets = aux_target is not None
-        if self._has_aux_targets and aux_target is None:
-            raise ValueError("Aux target presence is inconsistent across stored steps.")
-        if aux_target is not None:
-            self.aux_targets.append(aux_target)
-
-    def to_tensors(self, device, dtype):
-        states, actions, rewards, dones, masks = super().to_tensors(device, dtype)
-        aux_targets = None
-        if self._has_aux_targets:
-            keys = self.aux_targets[0].keys()
-            aux_targets = {
-                key: torch.stack([target[key] for target in self.aux_targets]).to(device=device, dtype=dtype)
-                for key in keys
-            }
-        return states, actions, rewards, dones, masks, aux_targets
-
-
-class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
-    """Sequence-capable hierarchical AAC with supervised reward/return/volatility heads."""
+    Inference (``act``) delegates to ``net.forward``, which manages its own
+    internal ``window_size`` rolling buffer independently.
+    """
 
     def __init__(
         self,
         network: dict,
         n_assets: int,
         n_buckets: int,
+        context_length: int = 64,
         gamma: float = 0.999,
         vf_coef: float = 0.5,
         ent_coef: float = 0.01,
@@ -71,6 +54,7 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
     ):
         if advantage_type not in ("td0", "gae", "mc"):
             raise ValueError(f"advantage_type must be 'td0', 'gae', or 'mc', got '{advantage_type}'.")
+
         self.gamma = gamma
         self.vf_coef = vf_coef
         self.ent_coef = ent_coef
@@ -81,12 +65,18 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         self.gae_lambda = gae_lambda
         self.dtype = dtype
         self.device = torch.device(device)
+        self.context_length = int(context_length)
 
         self.n_assets = int(n_assets)
         self.K = int(n_buckets)
         self.primary_dim = 1 + 3 * self.n_assets
 
         self.net = build_network(network).to(device=self.device, dtype=self.dtype)
+        if not isinstance(self.net, SpatiotemporalAuxiliaryPerAssetActionValueNetwork):
+            raise TypeError(
+                f"SpatiotemporalHierarchicalAACAgent requires a "
+                f"SpatiotemporalAuxiliaryPerAssetActionValueNetwork, got {type(self.net).__name__}."
+            )
         expected = self.primary_dim + 2 * self.K
         if int(self.net.action_dim) != expected:
             raise ValueError(
@@ -97,12 +87,38 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         self.action_dim = self.net.action_dim
 
         self.buffer = AuxiliaryHierarchicalRolloutBuffer()
+        self._ctx_buf: torch.Tensor | None = None
         self.net.reset(1)
 
-    def infer_from_seq(self, state_seq, h0=None):
-        if h0 is not None:
-            self.net.set_states(h0, strict=False)
-        return self.net.forward_seq(state_seq)
+    # ------------------------------------------------------------------
+    # Context buffer helpers
+    # ------------------------------------------------------------------
+
+    def _init_ctx_buf(self, ref_state: torch.Tensor) -> None:
+        """Allocate a zero-filled context buffer matching ref_state's shape."""
+        shape = (self.context_length, *ref_state.shape)
+        self._ctx_buf = torch.zeros(shape, device=self.device, dtype=self.dtype)
+
+    def _push_ctx(self, state: torch.Tensor) -> None:
+        """Shift the context buffer left by one and append state at the end."""
+        state = state.to(device=self.device, dtype=self.dtype)
+        if self._ctx_buf is None or self._ctx_buf.shape[1:] != state.shape:
+            self._init_ctx_buf(state)
+        self._ctx_buf = torch.cat([self._ctx_buf[1:], state.unsqueeze(0).detach()], dim=0)
+
+    def _snapshot_ctx(self) -> torch.Tensor | None:
+        """Return a detached clone of the current context buffer, or None."""
+        if self._ctx_buf is None:
+            return None
+        return self._ctx_buf.clone().detach()
+
+    # ------------------------------------------------------------------
+    # Core API
+    # ------------------------------------------------------------------
+
+    def reset(self, batch_size: int = 1) -> None:
+        self.net.reset(batch_size)
+        self._ctx_buf = None
 
     def act(self, state: torch.Tensor, mask: dict | None = None, explore: bool = False, grad_enabled: bool = False):
         with torch.set_grad_enabled(grad_enabled):
@@ -113,41 +129,89 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         return action if grad_enabled else action.cpu()
 
     def store(self, state, action, reward, done, mask=None, aux_target=None):
+        state_t = state if isinstance(state, torch.Tensor) else torch.as_tensor(state)
+        self._push_ctx(state_t.detach())
         self.buffer.store(state, action, reward, done, mask=mask, aux_target=aux_target)
 
     def init_optimizer(self, lr, optim="AdamW"):
         opt_cls = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
-    def compute_advantages(self, last_next_state: torch.Tensor, h0=None):
+    # ------------------------------------------------------------------
+    # forward_seq with context prefix
+    # ------------------------------------------------------------------
+
+    def infer_from_seq(self, state_seq, h0=None, ctx0=None):
+        """
+        Run forward_seq with an optional context prefix.
+
+        ctx0 : (context_length, [B,] state_dim) prepended before state_seq.
+               Outputs are sliced to remove the context prefix before returning.
+        """
+        C = 0
+        if ctx0 is not None and ctx0.shape[0] > 0:
+            full_seq = torch.cat([ctx0.to(device=self.device, dtype=self.dtype), state_seq], dim=0)
+            C = ctx0.shape[0]
+        else:
+            full_seq = state_seq
+
+        if h0 is not None:
+            self.net.set_states(h0, strict=False)
+
+        logits, values, aux = self.net.forward_seq(full_seq)
+
+        if C > 0:
+            logits = logits[C:]
+            values = values[C:]
+            aux = {k: v[C:] for k, v in aux.items()}
+
+        return logits, values, aux
+
+    def compute_advantages(self, last_next_state: torch.Tensor, h0=None, ctx0=None):
         states, actions, rewards, dones, masks, aux_targets = self.buffer.to_tensors(self.device, self.dtype)
         rewards = rewards.squeeze(-1) if rewards.dim() > actions.dim() - 1 else rewards
         dones = dones.squeeze(-1) if dones.dim() > actions.dim() - 1 else dones
 
         last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
+
+        C = 0
+        if ctx0 is not None and ctx0.shape[0] > 0:
+            C = ctx0.shape[0]
+            ctx_dev = ctx0.to(device=self.device, dtype=self.dtype)
+            all_states = torch.cat([ctx_dev, states, last_next_state[None]], dim=0)
+        else:
+            all_states = torch.cat([states, last_next_state[None]], dim=0)
+
         with torch.no_grad():
             if h0 is not None:
                 self.net.set_states(h0, strict=False)
-            all_states = torch.cat([states, last_next_state[None]], dim=0)
-            _, values_all, _ = _unpack_policy_value_aux(self.net.forward_seq(all_states))
-            v_t = values_all[:-1]
-            v_tp1 = values_all[1:]
+            _, values_all, _ = self.net.forward_seq(all_states)
 
-            if self.advantage_type == "gae":
-                raw_adv, returns = _compute_gae(rewards, dones, v_t, v_tp1, self.gamma, self.gae_lambda)
-            elif self.advantage_type == "mc":
-                raw_adv, returns = _compute_mc(rewards, dones, v_t, v_tp1[-1], self.gamma)
-            else:
-                returns = rewards + self.gamma * (1.0 - dones) * v_tp1
-                raw_adv = returns - v_t
+        values_all = values_all[C:]
+        v_t = values_all[:-1]
+        v_tp1 = values_all[1:]
 
-            advantages = raw_adv
-            if self.normalize_advantages:
-                advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-7)
+        if self.advantage_type == "gae":
+            raw_adv, returns = _compute_gae(rewards, dones, v_t, v_tp1, self.gamma, self.gae_lambda)
+        elif self.advantage_type == "mc":
+            raw_adv, returns = _compute_mc(rewards, dones, v_t, v_tp1[-1], self.gamma)
+        else:
+            returns = rewards + self.gamma * (1.0 - dones) * v_tp1
+            raw_adv = returns - v_t
+
+        advantages = raw_adv
+        if self.normalize_advantages:
+            advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-7)
 
         return advantages, raw_adv, returns, states, actions, rewards, masks, aux_targets
 
-    def update(self, last_next_state: torch.Tensor, h0: dict | None = None, max_grad_norm: float | None = None):
+    def update(
+        self,
+        last_next_state: torch.Tensor,
+        h0: dict | None = None,
+        ctx0: torch.Tensor | None = None,
+        max_grad_norm: float | None = None,
+    ):
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
         if len(self.buffer) == 0:
@@ -155,11 +219,10 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
 
         metrics = _init_update_metrics()
         advantages, raw_adv, returns, states, actions, rewards, masks, aux_targets = self.compute_advantages(
-            last_next_state,
-            h0=h0,
+            last_next_state, h0=h0, ctx0=ctx0,
         )
 
-        logits, values, aux = _unpack_policy_value_aux(self.infer_from_seq(states, h0=h0))
+        logits, values, aux = self.infer_from_seq(states, h0=h0, ctx0=ctx0)
         log_probs, entropy, primary_logits_m = self._policy_terms(logits, actions, masks)
 
         adv = advantages.detach()
@@ -197,6 +260,10 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         ckpt = torch.load(path, map_location=self.device)
         self.net.load_state_dict(ckpt["network"], strict=strict)
 
+    # ------------------------------------------------------------------
+    # Training loops
+    # ------------------------------------------------------------------
+
     def train_on_historical(
         self,
         env,
@@ -222,12 +289,7 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
             self.init_optimizer(lr, optim=optim)
 
         T, time_at, reset_env, step_env = _resolve_historical_source(
-            data,
-            high=high,
-            low=low,
-            volume=volume,
-            times=times,
-            open_=open_,
+            data, high=high, low=low, volume=volume, times=times, open_=open_,
         )
         close_src = _close_from_historical(data).to(device=self.device, dtype=self.dtype)
         horizon_pad = max(self.aux_horizons)
@@ -240,9 +302,10 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
             sim_t0 = time_at(start)
             state = reset_env(env, start)
             burn_in = burn_in_updates
-            self.net.reset()
+            self.reset(1)
             self.buffer.clear()
             h0 = self.net.get_states(clone=True, detach=True)
+            ctx0 = None  # no context at episode start
 
             if store_results:
                 episode_reward = []
@@ -283,14 +346,20 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
                         if burn_in > 0:
                             burn_in -= 1
                         else:
-                            loss_dict = self.update(next_state.to_tensor(), h0=h0, max_grad_norm=max_grad_norm)
+                            loss_dict = self.update(
+                                next_state.to_tensor(), h0=h0, ctx0=ctx0, max_grad_norm=max_grad_norm,
+                            )
                             if store_results:
                                 episode_loss.append(loss_dict)
-                            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
+                            msg = (
+                                f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}]"
+                                f" - reward: {float(reward):.5f} - portfolio: {info['V']:.2f}"
+                            )
                             for key, val in loss_dict.items():
                                 msg += f" - {key}: {sum(val) / len(val):.5f}"
                             print(msg, end="\r")
                         self.net.set_states(h0 := h_t, clone=True, detach=True)
+                        ctx0 = self._snapshot_ctx()
                         self.buffer.clear()
                     if terminal:
                         break
@@ -306,7 +375,10 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
                 total_reward.append(episode_reward)
                 total_info.append(episode_info)
 
-            msg = f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}] - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
+            msg = (
+                f"episode {episode} [{100*step/max_steps:.1f}% - {_fmt_sim_elapsed(time_at(start + step) - sim_t0)}]"
+                f" - reward: {sum(episode_reward) if store_results else 0.0:.5f} - portfolio: {info['V']:.2f}"
+            )
             if store_results and len(episode_loss) > 0:
                 for key in episode_loss[0].keys():
                     msg += f" - {key}: {sum(sum(ld[key]) / len(ld[key]) for ld in episode_loss) / len(episode_loss):.5f}"
@@ -341,8 +413,9 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         total_reward = []
 
         for episode in range(1, n_episodes + 1):
-            self.net.reset(B)
+            self.reset(B)
             h0 = self.net.get_states(clone=True, detach=True)
+            ctx0 = None  # no context at episode start
             burn_in = burn_in_updates
 
             starts = _sample_start_indices(T, max_steps + horizon_pad, batch_size=B)
@@ -383,7 +456,7 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
                         self.aux_horizons,
                         reward=rewards.to(device=self.device, dtype=self.dtype),
                     )
-                    self.buffer.store(
+                    self.store(
                         obs.detach(),
                         actions.detach(),
                         rewards.to(dtype=dtype),
@@ -398,7 +471,9 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
                         if burn_in > 0:
                             burn_in -= 1
                         else:
-                            loss_dict = self.update(next_obs, h0=h0, max_grad_norm=max_grad_norm)
+                            loss_dict = self.update(
+                                next_obs, h0=h0, ctx0=ctx0, max_grad_norm=max_grad_norm,
+                            )
                             if store_results:
                                 ep_loss.append(loss_dict)
                             msg = (
@@ -410,6 +485,7 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
                                 msg += f" - {key}: {sum(val) / len(val):.5f}"
                             print(msg, end="\r")
                         self.net.set_states(h0 := h_t, clone=True, detach=True)
+                        ctx0 = self._snapshot_ctx()
                         self.buffer.clear()
                     if terminal:
                         break

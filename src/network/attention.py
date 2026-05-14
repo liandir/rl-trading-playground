@@ -2,63 +2,13 @@ import math
 
 import torch
 
-
-def _split_heads(t: torch.Tensor, num_heads: int, d_head: int) -> torch.Tensor:
-    """(..., L, inner_dim) -> (..., num_heads, L, d_head)"""
-    return t.unflatten(-1, (num_heads, d_head)).transpose(-3, -2)
-
-
-def _merge_heads(t: torch.Tensor) -> torch.Tensor:
-    """(..., num_heads, L, d_head) -> (..., L, inner_dim)"""
-    return t.transpose(-3, -2).flatten(-2)
-
-
-def _scaled_dot_product_attention(
-    q_h: torch.Tensor,
-    k_h: torch.Tensor,
-    v_h: torch.Tensor,
-    *,
-    scale: float,
-    mask: torch.Tensor | None,
-    attn_dropout: float,
-    training: bool,
-) -> torch.Tensor:
-    if mask is not None and mask.dim() == q_h.dim() - 1:
-        mask = mask.unsqueeze(-3)
-    return torch.nn.functional.scaled_dot_product_attention(
-        q_h,
-        k_h,
-        v_h,
-        attn_mask=mask,
-        dropout_p=attn_dropout if training else 0.0,
-        scale=scale,
-    )
-
-
-def _init_linear(linear: torch.nn.Linear, *, bias: bool) -> None:
-    torch.nn.init.xavier_uniform_(linear.weight)
-    if bias:
-        torch.nn.init.zeros_(linear.bias)
-
-
-def _build_transformer_ffn(
-    d_model: int,
-    ff_hidden_dim: int,
-    *,
-    ff_dropout: float,
-    bias: bool,
-) -> torch.nn.Sequential:
-    ffn = torch.nn.Sequential(
-        torch.nn.Linear(d_model, ff_hidden_dim, bias=bias),
-        torch.nn.GELU(),
-        torch.nn.Dropout(ff_dropout),
-        torch.nn.Linear(ff_hidden_dim, d_model, bias=bias),
-        torch.nn.Dropout(ff_dropout),
-    )
-    for module in ffn:
-        if isinstance(module, torch.nn.Linear):
-            _init_linear(module, bias=bias)
-    return ffn
+from src.network.utils import (
+    _build_transformer_ffn,
+    _init_linear,
+    _merge_heads,
+    _scaled_dot_product_attention,
+    _split_heads,
+)
 
 
 class CrossAttention(torch.nn.Module):
@@ -315,7 +265,7 @@ class ResidualSelfAttentionBlock(torch.nn.Module):
 
 __all__ = [
     "CrossAttention",
+    "SelfAttention",
     "ResidualCrossAttentionBlock",
     "ResidualSelfAttentionBlock",
-    "SelfAttention",
 ]

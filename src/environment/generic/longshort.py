@@ -946,11 +946,9 @@ class BatchedMultiCurrencyEnv:
     # reset
     # -------------------------------------------------------------------------
 
-    def reset(self, close, high, low, volume, time, open_=None, C0=None):
+    def reset(self, open_, close, high, low, volume, time, C0=None):
         if C0 is not None:
             self.C0 = float(C0)
-        if open_ is None:
-            open_ = close
         B, N, M = self.B, self.N, self.M
 
         if self._explicit_device:
@@ -1081,11 +1079,9 @@ class BatchedMultiCurrencyEnv:
 
         return torch.cat([globals_block, asset_block.reshape(B, -1)], dim=1)
 
-    def _update(self, close, high, low, volume, time, open_=None):
+    def _update(self, open_, close, high, low, volume, time):
         self.V_prev = self.V.detach().clone()
         device = self._state_device()
-        if open_ is None:
-            open_ = close
         close  = close.to(device=device, dtype=self.dtype)
         high   = high.to(device=device, dtype=self.dtype)
         low    = low.to(device=device, dtype=self.dtype)
@@ -1280,10 +1276,10 @@ class BatchedMultiCurrencyEnv:
     # public step / mask
     # -------------------------------------------------------------------------
 
-    def step(self, actions, close, high, low, volume, time, open_=None):
+    def step(self, actions, open_, close, high, low, volume, time):
         """Returns obs (B, state_dim), rewards (B,), dones (B,)."""
         self._trade(actions)
-        self._update(close, high, low, volume, time, open_)
+        self._update(open_, close, high, low, volume, time)
         rewards = self._reward()
         dones   = self.V <= self.bankruptcy_threshold
         rewards = torch.where(dones, rewards - self.done_reward_penalty, rewards)

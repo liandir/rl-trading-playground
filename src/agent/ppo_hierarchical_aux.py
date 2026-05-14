@@ -174,8 +174,7 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
             starts = _sample_start_indices(T, max_steps + horizon_pad, batch_size=B)
             sim_t0 = float(times[starts[0]])
             obs = bat_env.reset(
-                close[starts], high[starts], low[starts], volume[starts], times[starts],
-                open_=open_[starts],
+                open_[starts], close[starts], high[starts], low[starts], volume[starts], times[starts],
             )
             self.buffer.clear()
 
@@ -196,7 +195,7 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
                     step_actions = (torch.zeros(B, dtype=torch.long), torch.zeros(B, dtype=torch.long))
 
                 next_obs, rewards, dones = bat_env.step(
-                    step_actions, close[si], high[si], low[si], volume[si], times[si], open_[si],
+                    step_actions, open_[si], close[si], high[si], low[si], volume[si], times[si],
                 )
 
                 if store_results and actions is not None:

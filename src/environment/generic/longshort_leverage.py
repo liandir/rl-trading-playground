@@ -817,9 +817,9 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         self._cleanup_dust()
         return to_liquidate.any(dim=1)
 
-    def step(self, actions, close, high, low, volume, time, open_=None):
+    def step(self, actions, open_, close, high, low, volume, time):
         self._trade(actions)
-        self._update(close, high, low, volume, time, open_)
+        self._update(open_, close, high, low, volume, time)
         breached = self.V < self.maintenance_requirement
         if bool(breached.any().item()):
             self._liquidate_breached(breached)

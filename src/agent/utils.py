@@ -213,10 +213,10 @@ def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=
             return float(times[idx])
 
         def reset_env(env, idx: int):
-            return env.reset(close[idx], high[idx], low[idx], volume[idx], times[idx], open_=open_[idx])
+            return env.reset(open_[idx], close[idx], high[idx], low[idx], volume[idx], times[idx])
 
         def step_env(env, action, idx: int):
-            return env.step(action, close[idx], high[idx], low[idx], volume[idx], times[idx], open_[idx])
+            return env.step(action, open_[idx], close[idx], high[idx], low[idx], volume[idx], times[idx])
 
         return T, time_at, reset_env, step_env
 

@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from torch import distributions
 
 from src.agent.utils import (
@@ -251,9 +252,19 @@ class _HierarchicalPolicyMixin:
 
 
 # ---------------------------------------------------------------------------
-# HierarchicalAACAgent (feedforward)
-class HierarchicalAACAgent(_HierarchicalPolicyMixin):
-    """Sequence-capable hierarchical AAC agent."""
+# HierarchicalModelAACAgent (feedforward)
+class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
+    """
+    Sequence-capable hierarchical AAC agent with inference-only latent rollouts.
+
+    The model-aware action path expects the network to provide:
+        encode_latent(state) -> latent
+        policy_value_from_latent(latent) -> (logits, value)
+        model_step(latent, action) -> dict/tuple containing next latent, reward, done
+
+    The imagined rollouts are deliberately not used by update(); they only score
+    candidate actions at inference time.
+    """
 
     def __init__(
         self,
@@ -263,9 +274,12 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
         gamma: float = 0.999,
         vf_coef: float = 0.5,
         ent_coef: float = 0.01,
+        model_coef: float = 0.1,
         normalize_advantages: bool = True,
         advantage_type: str = "td0",
         gae_lambda: float = 0.95,
+        imagine_length: int = 0,
+        n_imagined_trajectories: int = 0,
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
     ):
@@ -274,9 +288,12 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
         self.gamma                = gamma
         self.vf_coef              = vf_coef
         self.ent_coef             = ent_coef
+        self.model_coef           = model_coef
         self.normalize_advantages = normalize_advantages
         self.advantage_type       = advantage_type
         self.gae_lambda           = gae_lambda
+        self.imagine_length       = int(imagine_length)
+        self.n_imagined_trajectories = int(n_imagined_trajectories)
         self.dtype                = dtype
         self.device               = torch.device(device)
 
@@ -303,13 +320,193 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
             self.net.set_states(h0, strict=False)
         return self.net.forward_seq(state_seq)
 
+    def _net_states(self):
+        if not hasattr(self.net, "get_states"):
+            return None
+        return self.net.get_states(clone=True, detach=True)
+
+    def _set_net_states(self, states):
+        if states is not None and hasattr(self.net, "set_states"):
+            self.net.set_states(states, clone=True, detach=True, strict=False)
+
+    def _encode_latent(self, state: torch.Tensor) -> torch.Tensor:
+        if hasattr(self.net, "encode_latent"):
+            return self.net.encode_latent(state)
+        raise AttributeError("Model-based inference requires net.encode_latent(state).")
+
+    def _policy_value_from_latent(self, latent: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if hasattr(self.net, "policy_value_from_latent"):
+            return self.net.policy_value_from_latent(latent)
+        raise AttributeError("Model-based inference requires net.policy_value_from_latent(latent).")
+
+    def _model_step(
+        self,
+        latent: torch.Tensor,
+        action: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if not hasattr(self.net, "model_step"):
+            raise AttributeError("Model-based inference requires net.model_step(latent, action).")
+
+        out = self.net.model_step(latent, action)
+        if isinstance(out, dict):
+            next_latent = out.get("latent", out.get("next_latent"))
+            reward = out.get("reward", None)
+            done = out.get("done", None)
+        else:
+            if torch.is_tensor(out):
+                next_latent = out
+                reward = None
+                done = None
+            elif len(out) == 1:
+                next_latent = out[0]
+                reward = None
+                done = None
+            elif len(out) == 2:
+                next_latent, reward = out
+                done = None
+            elif len(out) == 3:
+                next_latent, reward, done = out
+            else:
+                raise ValueError("model_step must return next_latent, (next_latent, reward[, done]), or a matching dict.")
+
+        if next_latent is None:
+            raise ValueError("model_step output must include next_latent/latent.")
+
+        if reward is None:
+            reward = torch.zeros(next_latent.shape[:-1], dtype=self.dtype, device=self.device)
+        else:
+            reward = reward.to(device=self.device, dtype=self.dtype)
+        if done is None:
+            done = torch.zeros_like(reward, dtype=self.dtype, device=self.device)
+        else:
+            done = done.to(device=self.device, dtype=self.dtype)
+        return next_latent, reward, done
+
+    def imagine_rollouts(
+        self,
+        state: torch.Tensor,
+        mask: dict | None = None,
+        *,
+        length: int | None = None,
+        n_trajectories: int | None = None,
+        explore_first_action: bool = True,
+    ) -> dict[str, torch.Tensor]:
+        """
+        Roll out candidate trajectories through the latent model for inference.
+
+        Returns a dict with first_actions, returns, rewards, dones and actions.
+        No gradients are tracked and the live recurrent state is restored after
+        scoring candidates.
+        """
+        length = self.imagine_length if length is None else int(length)
+        n_trajectories = self.n_imagined_trajectories if n_trajectories is None else int(n_trajectories)
+        if length <= 0:
+            raise ValueError(f"imagine_length must be positive, got {length}.")
+        if n_trajectories <= 0:
+            raise ValueError(f"n_imagined_trajectories must be positive, got {n_trajectories}.")
+
+        state = state.to(dtype=self.dtype, device=self.device)
+        mask_dev = None if mask is None else {k: v.to(self.device) for k, v in mask.items()}
+        h_live = self._net_states()
+
+        with torch.no_grad():
+            latent0 = self._encode_latent(state)
+            logits0, _ = self._policy_value_from_latent(latent0)
+            if logits0.ndim != 1:
+                raise ValueError(
+                    "imagine_rollouts currently expects one unbatched state. "
+                    f"Got policy logits with shape {tuple(logits0.shape)}."
+                )
+            latent = latent0.unsqueeze(0).expand(n_trajectories, *latent0.shape).contiguous()
+
+            first_actions = None
+            actions = []
+            rewards = []
+            dones = []
+            alive = torch.ones(n_trajectories, device=self.device, dtype=self.dtype)
+            returns = torch.zeros(n_trajectories, device=self.device, dtype=self.dtype)
+            discount = torch.ones_like(returns)
+
+            logits = logits0.unsqueeze(0).expand(n_trajectories, *logits0.shape).contiguous()
+            if mask_dev is not None:
+                mask_t = {
+                    key: value.unsqueeze(0).expand(n_trajectories, *value.shape)
+                    for key, value in mask_dev.items()
+                }
+            else:
+                mask_t = None
+
+            for step in range(length):
+                action = self._sample_hierarchical(
+                    logits,
+                    mask_t if step == 0 else None,
+                    explore=explore_first_action or step > 0,
+                )
+                if step == 0:
+                    first_actions = action
+                actions.append(action)
+
+                latent, reward, done = self._model_step(latent, action)
+                reward = reward.reshape(n_trajectories)
+                done = done.reshape(n_trajectories).clamp(0.0, 1.0)
+                returns = returns + discount * alive * reward
+                rewards.append(reward)
+                dones.append(done)
+
+                alive = alive * (1.0 - done)
+                discount = discount * self.gamma
+                logits, values = self._policy_value_from_latent(latent)
+
+                if bool((alive <= 0).all().item()):
+                    break
+
+            returns = returns + discount * alive * values.reshape(n_trajectories)
+
+        self._set_net_states(h_live)
+        return {
+            "first_actions": first_actions,
+            "returns": returns,
+            "actions": torch.stack(actions, dim=0),
+            "rewards": torch.stack(rewards, dim=0),
+            "dones": torch.stack(dones, dim=0),
+        }
+
+    def act_imagined(
+        self,
+        state: torch.Tensor,
+        mask: dict | None = None,
+        *,
+        explore_first_action: bool = True,
+        advance_state: bool = True,
+    ) -> torch.Tensor:
+        rollouts = self.imagine_rollouts(
+            state,
+            mask=mask,
+            explore_first_action=explore_first_action,
+        )
+        best = rollouts["returns"].argmax(dim=0)
+        action = rollouts["first_actions"][best]
+        if advance_state:
+            with torch.no_grad():
+                state_dev = state.to(dtype=self.dtype, device=self.device)
+                self.net(state_dev)
+        return action.cpu()
+
     def act(
         self,
         state: torch.Tensor,
         mask: dict | None = None,
         explore: bool = False,
         grad_enabled: bool = False,
+        use_imagination: bool = False,
     ) -> torch.Tensor:
+        if use_imagination:
+            if grad_enabled:
+                raise ValueError("Imagined action selection is inference-only; use grad_enabled=False.")
+            if explore:
+                raise ValueError("Imagined action selection already samples candidates; use explore=False.")
+            return self.act_imagined(state, mask=mask)
+
         with torch.set_grad_enabled(grad_enabled):
             state = state.to(dtype=self.dtype, device=self.device)
             logits, _ = self.net(state)
@@ -358,6 +555,23 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
 
         return advantages, raw_adv, returns, states, actions, masks
 
+    def model_prediction_loss(self, states: torch.Tensor, actions: torch.Tensor, last_next_state: torch.Tensor, h0=None):
+        if not all(hasattr(self.net, name) for name in ("encode", "model_seq")):
+            return torch.zeros((), dtype=self.dtype, device=self.device)
+
+        last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
+        if h0 is not None:
+            self.net.set_states(h0, strict=False)
+        all_states = torch.cat([states, last_next_state[None]], dim=0)
+        z_all = self.net.encode(all_states)
+        z_t = z_all[:-1]
+        z_tp1 = z_all[1:].detach()
+
+        if h0 is not None:
+            self.net.set_states(h0, strict=False)
+        z_pred = self.net.model_seq(z_t, actions)
+        return F.mse_loss(z_pred, z_tp1)
+
     def update(
         self,
         last_next_state: torch.Tensor,
@@ -378,7 +592,13 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
         adv              = advantages.detach()
         policy_objective = (log_probs * adv).mean()
         value_loss       = 0.5 * (returns.detach() - values).pow(2).mean()
-        loss             = -policy_objective + self.vf_coef * value_loss - self.ent_coef * entropy
+        model_loss       = self.model_prediction_loss(states, actions, last_next_state, h0=h0)
+        loss             = (
+            -policy_objective
+            + self.vf_coef * value_loss
+            + self.model_coef * model_loss
+            - self.ent_coef * entropy
+        )
 
         self.optim.zero_grad(set_to_none=True)
         loss.backward()
@@ -398,6 +618,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
             entropy=entropy,
             loss=loss,
         )
+        metrics.setdefault("model_loss", []).append(float(model_loss.detach().cpu().item()))
 
         return metrics
 
@@ -665,3 +886,7 @@ class HierarchicalAACAgent(_HierarchicalPolicyMixin):
             print(msg)
 
         return total_loss, total_reward
+
+
+HierarchicalAACModelAgent = HierarchicalModelAACAgent
+HierarchicalAACAgent = HierarchicalModelAACAgent
