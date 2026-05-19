@@ -19,7 +19,7 @@ src/
 └── data.py       Dataset loading and preprocessing
 configs/          Experiment configuration files
 notebooks/        Training and analysis notebooks
-scripts/          Utility scripts (docs build, live feeds, notebook tooling)
+scripts/          Utility scripts (live feeds, notebook tooling)
 tests/            Test suite
 ```
 
@@ -93,7 +93,7 @@ expected variables.
 Build the static documentation site with:
 
 ```bash
-python3 scripts/build_docs.py
+uv run pydoc-builder --package src
 ```
 
 The command reads Python docstrings without importing the project — optional

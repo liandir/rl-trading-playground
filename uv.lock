@@ -1374,6 +1374,7 @@ dependencies = [
     { name = "bokeh" },
     { name = "forex" },
     { name = "matplotlib" },
+    { name = "pydoc-builder" },
     { name = "torch" },
     { name = "torchaudio" },
     { name = "torchvision" },
@@ -1392,6 +1393,7 @@ requires-dist = [
     { name = "bokeh", specifier = ">=3.9.0" },
     { name = "forex", git = "ssh://git@github.com/liandir/forex.git" },
     { name = "matplotlib", specifier = ">=3.10.9" },
+    { name = "pydoc-builder", git = "ssh://git@github.com/liandir/pydoc-builder.git" },
     { name = "torch", specifier = ">=2.11.0" },
     { name = "torchaudio", specifier = ">=2.11.0" },
     { name = "torchvision", specifier = ">=0.26.0" },
@@ -2022,6 +2024,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/1b/7d/92392ff7815c21062
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992", size = 48172, upload-time = "2026-01-21T14:26:50.693Z" },
 ]
+
+[[package]]
+name = "pydoc-builder"
+version = "0.1.0"
+source = { git = "ssh://git@github.com/liandir/pydoc-builder.git#829ea35e36eaa09e25fc26ef9779728d3c1f754b" }
 
 [[package]]
 name = "pygments"

@@ -11,6 +11,7 @@ dependencies = [
     "bokeh>=3.9.0",
     "forex",
     "matplotlib>=3.10.9",
+    "pydoc-builder",
     "torch>=2.11.0",
     "torchaudio>=2.11.0",
     "torchvision>=0.26.0",
@@ -30,6 +31,7 @@ dev = [
 
 [tool.uv.sources]
 forex = { git = "ssh://git@github.com/liandir/forex.git" }
+pydoc-builder = { git = "ssh://git@github.com/liandir/pydoc-builder.git", rev = "main" }
 
 [project.urls]
 Repository = "https://github.com/liandir/multi-currency-trading"
