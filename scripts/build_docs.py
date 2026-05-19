@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import ast
 import html
+import io
+import keyword
 import os
 import shutil
+import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,9 +33,8 @@ class ApiObject:
     anchor: str
     bases: list[str]
     params: list[str]
-    signature: str
-    signature_html: str
     docstring: str
+    source: str
     lineno: int
     children: list["ApiObject"] = field(default_factory=list)
 
@@ -77,7 +79,8 @@ def _prepare_docs_dir() -> None:
 def _parse_module(path: Path) -> ModuleDoc:
     """Parse one source file and collect its public docstrings."""
 
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    source_text = path.read_text(encoding="utf-8")
+    tree = ast.parse(source_text, filename=str(path))
     source_rel = path.relative_to(PROJECT_ROOT)
     if path.is_relative_to(PROJECT_ROOT / "src"):
         rel = path.relative_to(PROJECT_ROOT / "src")
@@ -93,11 +96,11 @@ def _parse_module(path: Path) -> ModuleDoc:
         module_name=module_name,
         page_path=page_path,
         docstring=ast.get_docstring(tree) or "",
-        objects=[_parse_object(node) for node in tree.body if _is_documentable(node)],
+        objects=[_parse_object(node, source_text) for node in tree.body if _is_documentable(node)],
     )
 
 
-def _parse_object(node: ast.AST, parent: str = "") -> ApiObject:
+def _parse_object(node: ast.AST, source_text: str, parent: str = "") -> ApiObject:
     """Parse a class or function node into a serializable documentation object."""
 
     assert isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
@@ -107,21 +110,15 @@ def _parse_object(node: ast.AST, parent: str = "") -> ApiObject:
         kind = "class"
         bases = [ast.unparse(base) for base in [*node.bases, *[kw.value for kw in node.keywords]]]
         params = []
-        signature = _class_signature(node)
-        signature_html = _class_signature_html(node)
-        children = [_parse_object(child, qualname) for child in node.body if _is_documentable(child)]
-    elif isinstance(node, ast.AsyncFunctionDef):
-        kind = "async method" if parent else "async function"
-        bases = []
-        params = _documentable_arg_names(node.args)
-        signature = _function_signature(node)
-        signature_html = _function_signature_html(node)
+        children = [
+            _parse_object(child, source_text, qualname)
+            for child in node.body
+            if _is_documentable(child)
+        ]
     else:
-        kind = "method" if parent else "function"
+        kind = ("async " if isinstance(node, ast.AsyncFunctionDef) else "") + ("method" if parent else "function")
         bases = []
         params = _documentable_arg_names(node.args)
-        signature = _function_signature(node)
-        signature_html = _function_signature_html(node)
 
     return ApiObject(
         kind=kind,
@@ -130,9 +127,8 @@ def _parse_object(node: ast.AST, parent: str = "") -> ApiObject:
         anchor=_anchor(qualname),
         bases=bases,
         params=params,
-        signature=signature,
-        signature_html=signature_html,
         docstring=ast.get_docstring(node) or "",
+        source=ast.get_source_segment(source_text, node) or "",
         lineno=node.lineno,
         children=children,
     )
@@ -142,94 +138,6 @@ def _is_documentable(node: ast.AST) -> bool:
     """Return whether a node should appear in API documentation."""
 
     return isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
-
-
-def _class_signature(node: ast.ClassDef) -> str:
-    """Return a static class signature including base classes."""
-
-    bases = [ast.unparse(base) for base in [*node.bases, *[kw.value for kw in node.keywords]]]
-    return f"class {node.name}({', '.join(bases)})" if bases else f"class {node.name}"
-
-
-def _function_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
-    """Return a static function signature, including return annotation."""
-
-    prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
-    args = ast.unparse(node.args)
-    returns = f" -> {ast.unparse(node.returns)}" if node.returns is not None else ""
-    return f"{prefix} {node.name}({args}){returns}"
-
-
-def _class_signature_html(node: ast.ClassDef) -> str:
-    """Return syntax-highlighted HTML for a class signature."""
-
-    bases = [ast.unparse(base) for base in [*node.bases, *[kw.value for kw in node.keywords]]]
-    base_html = ""
-    if bases:
-        rendered = ", ".join(f'<span class="sig-type">{_escape(base)}</span>' for base in bases)
-        base_html = f'<span class="sig-punct">(</span>{rendered}<span class="sig-punct">)</span>'
-    return (
-        '<span class="sig-keyword">class</span> '
-        f'<span class="sig-name">{_escape(node.name)}</span>{base_html}'
-    )
-
-
-def _function_signature_html(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
-    """Return syntax-highlighted HTML for a function signature."""
-
-    keyword = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
-    params = _signature_params_html(node.args)
-    returns = ""
-    if node.returns is not None:
-        returns = (
-            ' <span class="sig-punct">-&gt;</span> '
-            f'<span class="sig-return">{_escape(ast.unparse(node.returns))}</span>'
-        )
-    return (
-        f'<span class="sig-keyword">{keyword}</span> '
-        f'<span class="sig-name">{_escape(node.name)}</span>'
-        f'<span class="sig-punct">(</span>{params}<span class="sig-punct">)</span>{returns}'
-    )
-
-
-def _signature_params_html(args: ast.arguments) -> str:
-    """Return syntax-highlighted HTML for function parameters."""
-
-    parts: list[str] = []
-    positional = [*args.posonlyargs, *args.args]
-    defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
-    for index, (arg, default) in enumerate(zip(positional, defaults)):
-        parts.append(_signature_arg_html(arg, default))
-        if index == len(args.posonlyargs) - 1:
-            parts.append('<span class="sig-punct">/</span>')
-    if args.vararg is not None:
-        parts.append(_signature_arg_html(args.vararg, None, prefix="*"))
-    elif args.kwonlyargs:
-        parts.append('<span class="sig-punct">*</span>')
-    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
-        parts.append(_signature_arg_html(arg, default))
-    if args.kwarg is not None:
-        parts.append(_signature_arg_html(args.kwarg, None, prefix="**"))
-    return '<span class="sig-punct">,</span> '.join(parts)
-
-
-def _signature_arg_html(arg: ast.arg, default: ast.expr | None, *, prefix: str = "") -> str:
-    """Return syntax-highlighted HTML for a single function parameter."""
-
-    annotation = ""
-    if arg.annotation is not None:
-        annotation = (
-            '<span class="sig-punct">: </span>'
-            f'<span class="sig-type">{_escape(ast.unparse(arg.annotation))}</span>'
-        )
-    default_html = ""
-    if default is not None:
-        default_html = (
-            '<span class="sig-punct"> = </span>'
-            f'<span class="sig-default">{_escape(ast.unparse(default))}</span>'
-        )
-    prefix_html = f'<span class="sig-punct">{prefix}</span>' if prefix else ""
-    return f'{prefix_html}<span class="sig-param">{_escape(arg.arg)}</span>{annotation}{default_html}'
 
 
 def _documentable_arg_names(args: ast.arguments) -> list[str]:
@@ -292,13 +200,18 @@ def _write_site_index(modules: list[ModuleDoc]) -> None:
     existing_markdown = _markdown_docs()
     api_entries = _api_entry_directories(modules)
     api_links = "\n".join(
-        f"<li><a href='{_rel(DOCS_DIR / 'index.html', _directory_index_path(root))}'>"
-        f"{_escape(root.as_posix())}/</a><span>{_module_count(modules, root)} modules</span></li>"
+        _card(
+            _rel(DOCS_DIR / "index.html", _directory_index_path(root)),
+            f"{root.as_posix()}/",
+            f"{_module_count(modules, root)} modules",
+        )
         for root in api_entries
     )
     markdown_links = "\n".join(
-        f"<li><a href='{_rel(DOCS_DIR / 'index.html', _markdown_page_path(path))}'>"
-        f"{_escape(path.stem.replace('_', ' ').title())}</a></li>"
+        _card(
+            _rel(DOCS_DIR / "index.html", _markdown_page_path(path)),
+            path.stem.replace("_", " ").title(),
+        )
         for path in existing_markdown
     )
     body = f"""
@@ -328,8 +241,11 @@ def _write_api_index(modules: list[ModuleDoc]) -> None:
 
     api_entries = _api_entry_directories(modules)
     rows = "\n".join(
-        f"<li><a href='{_rel(DOCS_DIR / 'api' / 'index.html', _directory_index_path(root))}'>"
-        f"{_escape(root.as_posix())}/</a><span>{_module_count(modules, root)} modules</span></li>"
+        _card(
+            _rel(DOCS_DIR / "api" / "index.html", _directory_index_path(root)),
+            f"{root.as_posix()}/",
+            f"{_module_count(modules, root)} modules",
+        )
         for root in api_entries
     )
     body = f"""
@@ -380,13 +296,19 @@ def _write_directory_page(directory: Path, modules: list[ModuleDoc], dirs: set[P
     )
 
     child_dir_links = "\n".join(
-        f"<li><a href='{_rel(_directory_index_path(directory), _directory_index_path(child))}'>"
-        f"{_escape(child.name)}/</a><span>{_module_count(modules, child)} modules</span></li>"
+        _card(
+            _rel(_directory_index_path(directory), _directory_index_path(child)),
+            f"{child.name}/",
+            f"{_module_count(modules, child)} modules",
+        )
         for child in child_dirs
     )
     module_links = "\n".join(
-        f"<li><a href='{_rel(_directory_index_path(directory), module.page_path)}'>"
-        f"{_escape(module.source_rel.name)}</a><span>{_escape(_summary(module.docstring))}</span></li>"
+        _card(
+            _rel(_directory_index_path(directory), module.page_path),
+            module.source_rel.name,
+            _summary(module.docstring),
+        )
         for module in child_modules
     )
     parent_link = ""
@@ -595,15 +517,104 @@ def _render_object(
     """Render an extracted class or function."""
 
     children = "\n".join(_render_object(child, module, class_index) for child in obj.children)
+    heading = _object_heading(obj, module, class_index)
     return f"""
     <article class="api-object" id="{_escape(obj.anchor)}">
       <div class="object-meta">{_escape(obj.kind)} · line {obj.lineno}</div>
-      {_object_heading(obj, module, class_index)}
-      <div class="signature"><code>{obj.signature_html}</code></div>
+      {_heading_with_source(obj.source, heading)}
       {_doc_block(obj.docstring)}
       {children}
     </article>
     """
+
+
+def _heading_with_source(source: str, heading_html: str) -> str:
+    """Wrap the object heading in a <details> that reveals its source on click."""
+
+    if not source.strip():
+        return heading_html
+    return (
+        '<details class="source-block">'
+        '<summary>'
+        f'<div class="summary-heading">{heading_html}</div>'
+        '<span class="source-toggle">Source<span class="source-caret">▸</span></span>'
+        '</summary>'
+        f'<pre><code>{_highlight_python(source)}</code></pre>'
+        '</details>'
+    )
+
+
+_FSTRING_TYPES = {
+    getattr(tokenize, name)
+    for name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END")
+    if hasattr(tokenize, name)
+}
+
+
+def _highlight_python(source: str) -> str:
+    """Render Python source as HTML with tokenize-based syntax classes."""
+
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except (tokenize.TokenizeError, IndentationError, SyntaxError):
+        return _escape(source)
+
+    line_starts = [0]
+    for index, character in enumerate(source):
+        if character == "\n":
+            line_starts.append(index + 1)
+
+    def offset(line: int, col: int) -> int:
+        if line - 1 >= len(line_starts):
+            return len(source)
+        return min(line_starts[line - 1] + col, len(source))
+
+    spans: list[tuple[int, int, str]] = []
+    prev_keyword = ""
+    for tok in tokens:
+        kind = tok.type
+        text = tok.string
+        css: str | None = None
+        if kind == tokenize.COMMENT:
+            css = "tok-comment"
+        elif kind == tokenize.STRING or kind in _FSTRING_TYPES:
+            css = "tok-string"
+        elif kind == tokenize.NUMBER:
+            css = "tok-number"
+        elif kind == tokenize.NAME:
+            if keyword.iskeyword(text) or text in keyword.softkwlist:
+                css = "tok-keyword"
+                prev_keyword = text
+                start = offset(*tok.start)
+                end = offset(*tok.end)
+                if start < end:
+                    spans.append((start, end, css))
+                continue
+            if prev_keyword in ("def", "class"):
+                css = "tok-def-name"
+            elif text in {"self", "cls"}:
+                css = "tok-self"
+        elif kind == tokenize.OP:
+            css = "tok-punct"
+
+        prev_keyword = ""
+        if css is None:
+            continue
+        start = offset(*tok.start)
+        end = offset(*tok.end)
+        if start < end:
+            spans.append((start, end, css))
+
+    out: list[str] = []
+    cursor = 0
+    for start, end, css in spans:
+        if start > cursor:
+            out.append(_escape(source[cursor:start]))
+        out.append(f'<span class="{css}">{_escape(source[start:end])}</span>')
+        cursor = end
+    if cursor < len(source):
+        out.append(_escape(source[cursor:]))
+    return "".join(out)
 
 
 def _object_heading(
@@ -1092,11 +1103,8 @@ def _page(title: str, body: str, *, layout: str = "default") -> str:
       --accent: #0f766e;
       --accent-dark: #115e59;
       --code: #263238;
-      --sig-name: #075985;
-      --sig-param: #9a3412;
-      --sig-type: #6d28d9;
-      --sig-default: #64748b;
-      --sig-return: #047857;
+      --field-name: #9a3412;
+      --field-type: #6d28d9;
       --bg: #ffffff;
     }}
     * {{ box-sizing: border-box; }}
@@ -1150,11 +1158,29 @@ def _page(title: str, body: str, *, layout: str = "default") -> str:
     .module-list li {{
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 0.8rem 0.95rem;
       background: #fff;
       overflow-wrap: anywhere;
+      transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
     }}
-    .module-list.detailed li {{ display: flex; flex-direction: column; gap: 0.25rem; }}
+    .module-list li.card {{ padding: 0; }}
+    .module-list li.card > a {{
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      padding: 0.8rem 0.95rem;
+      color: inherit;
+      text-decoration: none;
+      border-radius: inherit;
+    }}
+    .module-list li.card:hover {{
+      border-color: var(--accent);
+      background: var(--panel);
+      transform: translateY(-1px);
+    }}
+    .module-list li.card .card-title {{ color: var(--accent-dark); font-weight: 600; }}
+    .module-list li.card .card-detail {{ color: var(--muted); }}
+    .module-list li:not(.card) {{ padding: 0.8rem 0.95rem; }}
+    .module-list.detailed li:not(.card) {{ display: flex; flex-direction: column; gap: 0.25rem; }}
     .module-list span, .muted {{ color: var(--muted); }}
     .directory-section {{ padding: 0; margin-top: 2rem; }}
     .crumbs {{
@@ -1253,14 +1279,6 @@ def _page(title: str, body: str, *, layout: str = "default") -> str:
       font-size: 0.85rem;
       margin-bottom: 0.25rem;
     }}
-    .signature {{
-      white-space: pre-wrap;
-      overflow-x: auto;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 0.9rem;
-      background: var(--panel);
-    }}
     .docstring {{
       margin: 0.7rem 0 1.1rem;
     }}
@@ -1304,12 +1322,12 @@ def _page(title: str, body: str, *, layout: str = "default") -> str:
       min-width: 0;
     }}
     .doc-field-name {{
-      color: var(--sig-param);
+      color: var(--field-name);
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       font-weight: 700;
     }}
     .doc-field-type {{
-      color: var(--sig-type);
+      color: var(--field-type);
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
     }}
     .doc-field-type::before {{ content: "("; color: #4b5563; }}
@@ -1348,6 +1366,67 @@ def _page(title: str, body: str, *, layout: str = "default") -> str:
       background: #ffffff;
       margin: 0.6rem 0 0;
     }}
+    .source-block {{
+      margin: 0.3rem 0 0.6rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      overflow: hidden;
+    }}
+    .source-block > summary {{
+      cursor: pointer;
+      list-style: none;
+      padding: 0.85rem 1.05rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      background: var(--panel);
+    }}
+    .source-block > summary::-webkit-details-marker {{ display: none; }}
+    .source-block > summary:hover {{ background: #eef2f4; }}
+    .summary-heading {{
+      flex: 1 1 auto;
+      min-width: 0;
+    }}
+    .summary-heading h2 {{
+      margin: 0;
+      font-size: 1.55rem;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .source-toggle {{
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }}
+    .source-caret {{
+      display: inline-block;
+      transition: transform 0.15s ease;
+    }}
+    .source-block[open] .source-caret {{ transform: rotate(90deg); }}
+    .source-block > pre {{
+      margin: 0;
+      padding: 1rem 1.05rem;
+      overflow-x: auto;
+      border-top: 1px solid var(--line);
+      font-size: 0.88rem;
+      line-height: 1.55;
+      color: var(--ink);
+    }}
+    .tok-keyword {{ color: #8250df; font-weight: 600; }}
+    .tok-string  {{ color: #0a3069; }}
+    .tok-number  {{ color: #0550ae; }}
+    .tok-comment {{ color: #6e7781; font-style: italic; }}
+    .tok-def-name {{ color: #6f42c1; font-weight: 600; }}
+    .tok-self {{ color: #cf222e; font-style: italic; }}
+    .tok-punct {{ color: #57606a; }}
     .markdown-doc {{
       max-width: 980px;
     }}
@@ -1360,15 +1439,6 @@ def _page(title: str, body: str, *, layout: str = "default") -> str:
     .markdown-doc ul {{
       padding-left: 1.3rem;
     }}
-    .signature {{ color: var(--code); }}
-    .signature code {{ white-space: pre-wrap; }}
-    .sig-keyword {{ color: var(--accent-dark); font-weight: 700; }}
-    .sig-name {{ color: var(--sig-name); font-weight: 700; }}
-    .sig-param {{ color: var(--sig-param); }}
-    .sig-type {{ color: var(--sig-type); font-weight: 600; }}
-    .sig-default {{ color: var(--sig-default); }}
-    .sig-return {{ color: var(--sig-return); font-weight: 700; }}
-    .sig-punct {{ color: #4b5563; }}
     @media (max-width: 860px) {{
       .split {{ display: block; }}
       .side {{ position: static; height: auto; max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); }}
@@ -1393,6 +1463,17 @@ def _summary(docstring: str) -> str:
         return "No module docstring."
     sentence, _, _ = stripped.partition(". ")
     return sentence + ("." if not sentence.endswith(".") else "")
+
+
+def _card(href: str, title: str, detail: str = "") -> str:
+    """Render a fully-clickable module-list card with a title and optional detail."""
+
+    detail_html = f'<span class="card-detail">{_escape(detail)}</span>' if detail else ""
+    return (
+        f'<li class="card"><a href="{_escape(href)}">'
+        f'<span class="card-title">{_escape(title)}</span>{detail_html}'
+        '</a></li>'
+    )
 
 
 def _rel(from_path: Path, to_path: Path) -> str:
