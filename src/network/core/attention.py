@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from src.network.utils import (
+from src.network.core.utils import (
     _build_transformer_ffn,
     _init_linear,
     _merge_heads,

@@ -4,7 +4,7 @@ from src.agent.aac_hierarchical import (
     HierarchicalRolloutBuffer,
     _HierarchicalPolicyMixin,
 )
-from src.agent.network import build_network
+from src.network import build_network
 from src.agent.ppo import (
     _append_update_metrics,
     _empty_update_metrics,

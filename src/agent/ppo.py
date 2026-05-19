@@ -1,7 +1,7 @@
 import torch
 from torch import distributions
 
-from src.agent.network import build_network
+from src.network import build_network
 from src.agent.utils import (
     apply_action_mask,
     _compute_gae,

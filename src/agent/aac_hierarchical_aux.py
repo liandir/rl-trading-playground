@@ -18,7 +18,7 @@ from src.agent.aac_hierarchical import (
     _HierarchicalPolicyMixin,
     _resolve_historical_source,
 )
-from src.agent.network import build_network
+from src.network import build_network
 
 
 class AuxiliaryHierarchicalRolloutBuffer(HierarchicalRolloutBuffer):

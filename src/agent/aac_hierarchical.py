@@ -14,7 +14,7 @@ from src.agent.utils import (
     _split_logits,
     apply_action_mask,
 )
-from src.agent.network import build_network
+from src.network import build_network
 
 
 # ---------------------------------------------------------------------------

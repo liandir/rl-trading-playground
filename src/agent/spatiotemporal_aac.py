@@ -19,7 +19,7 @@ from src.agent.aac_hierarchical import (
     _resolve_historical_source,
 )
 from src.agent.aac_hierarchical_aux import AuxiliaryHierarchicalRolloutBuffer
-from src.agent.network import build_network, SpatiotemporalAuxiliaryPerAssetActionValueNetwork
+from src.network import build_network, SpatiotemporalAuxiliaryPerAssetActionValueNetwork
 
 
 class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):

@@ -1,0 +1,357 @@
+import torch
+
+from src.network.core.attention import ResidualSelfAttentionBlock
+from src.network.core.recurrent import RecurrentNetwork, _build_recurrent_cell
+from src.network.core.vanilla import VanillaNetwork
+
+
+class _LatentRecurrentFeedForwardBranch(torch.nn.Module):
+    """Parallel recurrent/feedforward branch used by latent model heads."""
+
+    def __init__(
+        self,
+        n_in: int,
+        d_mem: int,
+        d_ff: int,
+        hidden_dims_mem=None,
+        hidden_dims_ff=None,
+        combine_mode: str = "concat",
+        activation=torch.tanh,
+        recurrent_activation=torch.tanh,
+        recurrent_type: str = "simple",
+        recurrent_kwargs: dict | None = None,
+    ):
+        super().__init__()
+        if combine_mode not in ("concat", "add"):
+            raise ValueError(f"combine_mode must be 'concat' or 'add', got '{combine_mode}'.")
+        if combine_mode == "add" and int(d_mem) != int(d_ff):
+            raise ValueError(
+                f"combine_mode='add' requires d_mem == d_ff, got d_mem={d_mem}, d_ff={d_ff}."
+            )
+        hidden_dims_mem = hidden_dims_mem or []
+        hidden_dims_ff = hidden_dims_ff or []
+        recurrent_kwargs = dict(recurrent_kwargs or {})
+
+        self.n_in = int(n_in)
+        self.d_mem = int(d_mem)
+        self.d_ff = int(d_ff)
+        self.combine_mode = combine_mode
+        self.out_dim = self.d_mem if self.combine_mode == "add" else self.d_mem + self.d_ff
+
+        if hidden_dims_mem:
+            self.recurrent = RecurrentNetwork(
+                self.n_in,
+                self.d_mem,
+                hidden_dims=hidden_dims_mem,
+                activation=recurrent_activation,
+                recurrent_type=recurrent_type,
+                recurrent_kwargs=recurrent_kwargs,
+            )
+        else:
+            self.recurrent = _build_recurrent_cell(
+                self.n_in,
+                self.d_mem,
+                recurrent_activation,
+                recurrent_type,
+                recurrent_kwargs,
+            )
+        self._recurrent_is_network = isinstance(self.recurrent, RecurrentNetwork)
+        self.feedforward = VanillaNetwork(
+            self.n_in,
+            self.d_ff,
+            hidden_dims=hidden_dims_ff,
+            activation=activation,
+        )
+
+    def _combine(self, h_mem: torch.Tensor, h_ff: torch.Tensor) -> torch.Tensor:
+        if self.combine_mode == "add":
+            return h_mem + h_ff
+        return torch.cat([h_mem, h_ff], dim=-1)
+
+    def reset(self, batch_size: int = 1, device: torch.device = None, dtype: torch.dtype = None):
+        self.recurrent.reset(batch_size, device=device, dtype=dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._combine(self.recurrent(x), self.feedforward(x))
+
+    def forward_seq(self, x_seq: torch.Tensor) -> torch.Tensor:
+        shape = x_seq.shape
+        h_mem = self.recurrent.forward_seq(x_seq)
+        h_ff = self.feedforward(x_seq.reshape(-1, self.n_in)).view(*shape[:-1], self.d_ff)
+        return self._combine(h_mem, h_ff)
+
+    def get_state(self, clone: bool = True, detach: bool = True):
+        if self._recurrent_is_network:
+            return self.recurrent.get_states(clone=clone, detach=detach)
+        return self.recurrent.get_state(clone=clone, detach=detach)
+
+    def set_state(self, state, clone: bool = True, detach: bool = True, strict: bool = True):
+        if self._recurrent_is_network:
+            self.recurrent.set_states(state, clone=clone, detach=detach, strict=strict)
+        else:
+            self.recurrent.set_state(state, clone=clone, detach=detach)
+
+
+class AttentionMemoryModelNetwork(torch.nn.Module):
+    """
+    Attention-memory actor/value/model network with shared global memory.
+
+    ``encode(x)`` returns the flattened post-attention latent ``z``. A shared
+    parallel recurrent + feedforward global memory consumes ``z`` and produces
+    ``global_h``. Each of the actor, value, and model heads is a single network
+    on top of ``global_h``: a ``RecurrentNetwork`` when its ``*_recurrent`` flag
+    is True, otherwise a ``VanillaNetwork``.
+    """
+
+    name = "attention_memory_model"
+
+    def __init__(
+        self,
+        num_assets: int,
+        d_asset: int,
+        d_global: int,
+        action_dim: int,
+        d_model: int = 64,
+        asset_embed_dim: int | None = None,
+        hidden_dims_asset=None,
+        num_heads: int = 1,
+        n_att_layers: int = 1,
+        use_layer_norm: bool = False,
+        d_mem: int = 64,
+        d_ff: int = 64,
+        hidden_dims_mem=None,
+        hidden_dims_ff=None,
+        combine_mode: str = "concat",
+        actor_recurrent: bool = False,
+        value_recurrent: bool = False,
+        model_recurrent: bool = False,
+        hidden_dims_actor=None,
+        hidden_dims_value=None,
+        hidden_dims_model=None,
+        activation=torch.tanh,
+        recurrent_activation=torch.tanh,
+        recurrent_type: str = "simple",
+        recurrent_kwargs: dict | None = None,
+    ):
+        super().__init__()
+        hidden_dims_asset = hidden_dims_asset or []
+        hidden_dims_mem = hidden_dims_mem or []
+        hidden_dims_ff = hidden_dims_ff or []
+        hidden_dims_actor = hidden_dims_actor or []
+        hidden_dims_value = hidden_dims_value or []
+        hidden_dims_model = hidden_dims_model or []
+
+        self.num_assets = int(num_assets)
+        self.d_asset = int(d_asset)
+        self.d_global = int(d_global)
+        self.state_dim = self.d_global + self.num_assets * self.d_asset
+        self.action_dim = int(action_dim)
+        self.d_model = int(d_model)
+        self.asset_embed_dim = self.d_model if asset_embed_dim is None else int(asset_embed_dim)
+        self.num_heads = int(num_heads)
+        self.n_att_layers = int(n_att_layers)
+        self.use_layer_norm = bool(use_layer_norm)
+        self.d_mem = int(d_mem)
+        self.d_ff = int(d_ff)
+        self.combine_mode = combine_mode
+        self.actor_recurrent = bool(actor_recurrent)
+        self.value_recurrent = bool(value_recurrent)
+        self.model_recurrent = bool(model_recurrent)
+        self.activation = activation
+        self.recurrent_activation = recurrent_activation
+        self.recurrent_type = recurrent_type
+        self.recurrent_kwargs = dict(recurrent_kwargs or {})
+
+        if self.asset_embed_dim <= 0:
+            raise ValueError(f"asset_embed_dim must be >= 1, got {self.asset_embed_dim}.")
+        self.token_dim = self.d_model + self.asset_embed_dim
+        if self.num_heads > 1 and self.token_dim % self.num_heads != 0:
+            raise ValueError(
+                f"d_model + asset_embed_dim ({self.token_dim}) must be divisible by "
+                f"num_heads ({self.num_heads})."
+            )
+
+        self.primary_action_dim = 1 + 3 * self.num_assets
+        bucket_part = self.action_dim - self.primary_action_dim
+        if bucket_part <= 0 or bucket_part % 2 != 0:
+            raise ValueError(
+                f"action_dim must match hierarchical layout 1 + 3*N + 2*K; got action_dim={self.action_dim}."
+            )
+        self.n_size_buckets = bucket_part // 2
+        self.action_encoding_dim = self.primary_action_dim + self.n_size_buckets
+
+        self.asset_extractor = VanillaNetwork(
+            self.d_asset + self.d_global,
+            self.d_model,
+            hidden_dims=hidden_dims_asset,
+            activation=activation,
+        )
+        self.asset_embedding = torch.nn.Embedding(self.num_assets, self.asset_embed_dim)
+        torch.nn.init.xavier_uniform_(self.asset_embedding.weight)
+        self.register_buffer("_asset_ids", torch.arange(self.num_assets, dtype=torch.long), persistent=False)
+
+        self.attention_layers = torch.nn.ModuleList(
+            ResidualSelfAttentionBlock(self.token_dim, self.num_heads, use_layer_norm=self.use_layer_norm)
+            for _ in range(self.n_att_layers)
+        )
+        self.latent_dim = self.num_assets * self.token_dim
+
+        self.global_branch = _LatentRecurrentFeedForwardBranch(
+            self.latent_dim,
+            d_mem=self.d_mem,
+            d_ff=self.d_ff,
+            hidden_dims_mem=hidden_dims_mem,
+            hidden_dims_ff=hidden_dims_ff,
+            combine_mode=combine_mode,
+            activation=activation,
+            recurrent_activation=recurrent_activation,
+            recurrent_type=recurrent_type,
+            recurrent_kwargs=self.recurrent_kwargs,
+        )
+        self.global_dim = self.global_branch.out_dim
+
+        self.actor = self._build_head(self.global_dim, self.action_dim, self.actor_recurrent, hidden_dims_actor)
+        self.value_head = self._build_head(self.global_dim, 1, self.value_recurrent, hidden_dims_value)
+        self.model_head = self._build_head(
+            self.global_dim + self.action_encoding_dim, self.latent_dim, self.model_recurrent, hidden_dims_model,
+        )
+
+    def _build_head(self, n_in: int, n_out: int, recurrent: bool, hidden_dims: list[int]) -> torch.nn.Module:
+        if recurrent:
+            return RecurrentNetwork(
+                n_in,
+                n_out,
+                hidden_dims=hidden_dims,
+                activation=self.recurrent_activation,
+                recurrent_type=self.recurrent_type,
+                recurrent_kwargs=self.recurrent_kwargs,
+            )
+        return VanillaNetwork(n_in, n_out, hidden_dims=hidden_dims, activation=self.activation)
+
+    def _encode_tokens(self, x_flat: torch.Tensor) -> torch.Tensor:
+        B = x_flat.shape[0]
+        globals_feat = x_flat[:, : self.d_global]
+        asset_feat = x_flat[:, self.d_global :].view(B, self.num_assets, self.d_asset)
+        globals_broadcast = globals_feat.unsqueeze(1).expand(-1, self.num_assets, -1)
+        per_asset_in = torch.cat([asset_feat, globals_broadcast], dim=-1)
+        asset_repr = self.asset_extractor(per_asset_in).view(B, self.num_assets, self.d_model)
+        asset_emb = self.asset_embedding(self._asset_ids).unsqueeze(0).expand(B, -1, -1)
+        tokens = torch.cat([asset_repr, asset_emb], dim=-1)
+        for block in self.attention_layers:
+            tokens = block(tokens)
+        return tokens
+
+    def _encode_action(self, action: torch.Tensor) -> torch.Tensor:
+        a_d = action[..., 0].long().clamp(0, self.primary_action_dim - 1)
+        a_q = action[..., 1].long().clamp(0, self.n_size_buckets - 1)
+        primary = torch.nn.functional.one_hot(a_d, self.primary_action_dim)
+        bucket = torch.nn.functional.one_hot(a_q, self.n_size_buckets)
+        return torch.cat([primary, bucket], dim=-1).to(dtype=next(self.parameters()).dtype, device=action.device)
+
+    def _global(self, z: torch.Tensor) -> torch.Tensor:
+        shape = z.shape
+        h = self.global_branch(z.reshape(-1, self.latent_dim))
+        return h.reshape(shape[:-1] + (self.global_dim,))
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        shape = x.shape
+        x_flat = x.reshape(-1, self.state_dim)
+        z = self._encode_tokens(x_flat).reshape(x_flat.shape[0], self.latent_dim)
+        return z.reshape(shape[:-1] + (self.latent_dim,))
+
+    def encode_latent(self, x: torch.Tensor) -> torch.Tensor:
+        return self.encode(x)
+
+    def action(self, z: torch.Tensor, global_h: torch.Tensor | None = None) -> torch.Tensor:
+        if global_h is None:
+            global_h = self._global(z)
+        shape = z.shape
+        logits = self.actor(global_h.reshape(-1, self.global_dim))
+        return logits.reshape(shape[:-1] + (self.action_dim,))
+
+    def value(self, z: torch.Tensor, global_h: torch.Tensor | None = None) -> torch.Tensor:
+        if global_h is None:
+            global_h = self._global(z)
+        shape = z.shape
+        return self.value_head(global_h.reshape(-1, self.global_dim)).squeeze(-1).reshape(shape[:-1])
+
+    def policy_value_from_latent(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        global_h = self._global(z)
+        return self.action(z, global_h=global_h), self.value(z, global_h=global_h)
+
+    def model(
+        self,
+        z: torch.Tensor,
+        action: torch.Tensor,
+        global_h: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if global_h is None:
+            global_h = self._global(z)
+        action_enc = self._encode_action(action.reshape(-1, 2).to(device=z.device))
+        model_in = torch.cat([global_h.reshape(-1, self.global_dim), action_enc], dim=-1)
+        return self.model_head(model_in).reshape(z.shape)
+
+    def model_seq(self, z_seq: torch.Tensor, action_seq: torch.Tensor) -> torch.Tensor:
+        if z_seq.shape[:-1] != action_seq.shape[:-1] or action_seq.shape[-1] != 2:
+            raise ValueError(
+                "Expected z_seq shape (..., latent_dim) and action_seq shape (..., 2), "
+                f"got {tuple(z_seq.shape)} and {tuple(action_seq.shape)}."
+            )
+        global_seq = self.global_branch.forward_seq(z_seq)
+        action_enc = self._encode_action(action_seq.to(device=z_seq.device))
+        return self.model_head.forward_seq(torch.cat([global_seq, action_enc], dim=-1))
+
+    def model_step(self, z: torch.Tensor, action: torch.Tensor) -> dict[str, torch.Tensor]:
+        next_z = self.model(z, action)
+        reward = torch.zeros(next_z.shape[:-1], dtype=next_z.dtype, device=next_z.device)
+        done = torch.zeros_like(reward)
+        return {"next_latent": next_z, "reward": reward, "done": done}
+
+    def forward(self, x: torch.Tensor):
+        return self.policy_value_from_latent(self.encode(x))
+
+    def forward_seq(self, x_seq: torch.Tensor):
+        if x_seq.dim() not in (2, 3) or x_seq.shape[-1] != self.state_dim:
+            raise ValueError(
+                f"Expected sequence input with shape (T, {self.state_dim}) or "
+                f"(T, B, {self.state_dim}), got {tuple(x_seq.shape)}."
+            )
+        squeeze_batch = x_seq.dim() == 2
+        x_batched = x_seq.unsqueeze(1) if squeeze_batch else x_seq
+        T, B = x_batched.shape[:2]
+
+        z_seq = self.encode(x_batched).view(T, B, self.latent_dim)
+        global_seq = self.global_branch.forward_seq(z_seq)
+        logits = self.actor.forward_seq(global_seq)
+        values = self.value_head.forward_seq(global_seq).squeeze(-1)
+
+        if squeeze_batch:
+            return logits.squeeze(1), values.squeeze(1)
+        return logits, values
+
+    def reset(self, batch_size: int = 1):
+        device = next(self.parameters()).device
+        dtype = next(self.parameters()).dtype
+        self.global_branch.reset(batch_size, device=device, dtype=dtype)
+        self.actor.reset(batch_size, device=device, dtype=dtype)
+        self.value_head.reset(batch_size, device=device, dtype=dtype)
+        self.model_head.reset(batch_size, device=device, dtype=dtype)
+
+    def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        return {
+            "global": self.global_branch.get_state(clone=clone, detach=detach),
+            "actor": self.actor.get_states(clone=clone, detach=detach),
+            "value": self.value_head.get_states(clone=clone, detach=detach),
+            "model": self.model_head.get_states(clone=clone, detach=detach),
+        }
+
+    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+        if strict:
+            for key in ("global", "actor", "value", "model"):
+                if key not in states:
+                    raise KeyError(f"Missing key '{key}' in states snapshot.")
+        self.global_branch.set_state(states.get("global"), clone=clone, detach=detach, strict=strict)
+        self.actor.set_states(states.get("actor", {}), clone=clone, detach=detach, strict=strict)
+        self.value_head.set_states(states.get("value", {}), clone=clone, detach=detach, strict=strict)
+        self.model_head.set_states(states.get("model", {}), clone=clone, detach=detach, strict=strict)
+
