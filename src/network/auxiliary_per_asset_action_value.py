@@ -1,10 +1,10 @@
 import torch
 
-from src.network.flat_per_asset_action_value import FlatPerAssetActionValueNetwork
+from src.network.core.per_asset import BaseFlatPerAssetActionValueNetwork
 from src.network.core.vanilla import VanillaNetwork
 
 
-class AuxiliaryPerAssetActionValueNetwork(FlatPerAssetActionValueNetwork):
+class AuxiliaryPerAssetActionValueNetwork(BaseFlatPerAssetActionValueNetwork):
     """
     ``FlatPerAssetActionValueNetwork`` plus supervised predictive heads.
 
@@ -142,4 +142,3 @@ class AuxiliaryPerAssetActionValueNetwork(FlatPerAssetActionValueNetwork):
             values_seq = values_seq.squeeze(1)
             aux_seq = {key: value.squeeze(1) for key, value in aux_seq.items()}
         return logits_seq, values_seq, aux_seq
-

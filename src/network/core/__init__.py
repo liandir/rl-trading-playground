@@ -2,6 +2,12 @@ from src.network.core.attention import (
     ResidualCrossAttentionBlock,
     ResidualSelfAttentionBlock,
 )
+from src.network.core.branches import LatentRecurrentFeedForwardBranch
+from src.network.core.feedforward_heads import (
+    FeedForwardActionQNetwork,
+    FeedForwardActionValueNetwork,
+)
+from src.network.core.per_asset import BaseFlatPerAssetActionValueNetwork
 from src.network.core.recurrent import (
     RecurrentActionQNetwork,
     RecurrentActionValueNetwork,
@@ -25,6 +31,10 @@ from src.network.core.vanilla import (
 
 __all__ = [
     "ActionValueNetwork",
+    "BaseFlatPerAssetActionValueNetwork",
+    "FeedForwardActionQNetwork",
+    "FeedForwardActionValueNetwork",
+    "LatentRecurrentFeedForwardBranch",
     "RecurrentActionQNetwork",
     "RecurrentActionValueNetwork",
     "RecurrentNetwork",

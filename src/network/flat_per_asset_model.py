@@ -1,6 +1,6 @@
 import torch
 
-from src.network.attention_memory_model import _LatentRecurrentFeedForwardBranch
+from src.network.core.branches import LatentRecurrentFeedForwardBranch
 from src.network.core.recurrent import RecurrentNetwork
 from src.network.core.vanilla import VanillaNetwork
 
@@ -107,7 +107,7 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         self.register_buffer("_asset_ids", torch.arange(self.num_assets, dtype=torch.long), persistent=False)
 
         self.latent_dim = self.num_assets * self.token_dim
-        self.global_branch = _LatentRecurrentFeedForwardBranch(
+        self.global_branch = LatentRecurrentFeedForwardBranch(
             self.latent_dim,
             d_mem=self.d_mem,
             d_ff=self.d_ff,

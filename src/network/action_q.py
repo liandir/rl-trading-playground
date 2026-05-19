@@ -4,68 +4,6 @@ from src.network.core.recurrent import RecurrentNetwork, _build_recurrent_cell
 from src.network.core.vanilla import VanillaNetwork
 
 
-class _FeedForwardActionQNetwork(torch.nn.Module):
-    """Shared feedforward trunk with categorical-policy and discrete-Q heads."""
-
-    name = "action_q"
-
-    def __init__(
-        self,
-        state_dim,
-        action_dim,
-        hidden_dims=[],
-        hidden_dims_actor=[],
-        hidden_dims_q=[],
-        activation=torch.relu,
-    ):
-        super().__init__()
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.activation = activation
-
-        self.layers = torch.nn.ModuleList()
-        prev = state_dim
-        for h in hidden_dims:
-            self.layers.append(torch.nn.Linear(prev, h))
-            prev = h
-
-        self.actor = VanillaNetwork(
-            prev,
-            action_dim,
-            hidden_dims=hidden_dims_actor,
-            activation=activation,
-        )
-
-        self.q_head = VanillaNetwork(
-            prev,
-            action_dim,
-            hidden_dims=hidden_dims_q,
-            activation=activation,
-        )
-
-    def forward(self, x):
-        shape = x.shape
-        z = x.view(-1, self.state_dim)
-        for layer in self.layers:
-            z = self.activation(layer(z))
-        logits = self.actor(z).view(*shape[:-1], self.action_dim)
-        q_values = self.q_head(z).view(*shape[:-1], self.action_dim)
-        return logits, q_values
-
-    def reset(self, batch_size: int = 1):
-        return None
-
-    def forward_seq(self, x_seq):
-        return self.forward(x_seq)
-
-    def get_states(self, clone: bool = True, detach: bool = True) -> dict:
-        return {}
-
-    def set_states(self, states: dict | None, clone: bool = True, detach: bool = True, strict: bool = True):
-        if strict and states not in ({}, None):
-            raise ValueError("Feedforward ActionQNetwork has no recurrent state.")
-
-
 class ActionQNetwork(torch.nn.Module):
     """Shared recurrent trunk with categorical-policy and discrete-Q heads."""
 
@@ -160,4 +98,3 @@ class ActionQNetwork(torch.nn.Module):
 
         self.actor.set_states(actor_states, clone=clone, detach=detach, strict=strict)
         self.q_head.set_states(q_states, clone=clone, detach=detach, strict=strict)
-
