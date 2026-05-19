@@ -1,0 +1,22 @@
+{
+  "BTC":   ["bitcoin", "BTC", "$BTC", "XBT"],
+  "ETH":   ["ethereum", "ether", "ETH", "$ETH"],
+  "SOL":   ["solana", "SOL", "$SOL"],
+  "XRP":   ["ripple", "XRP", "$XRP"],
+  "ADA":   ["cardano", "ADA", "$ADA"],
+  "DOGE":  ["dogecoin", "DOGE", "$DOGE"],
+  "AVAX":  ["avalanche", "AVAX", "$AVAX"],
+  "DOT":   ["polkadot", "DOT", "$DOT"],
+  "MATIC": ["polygon", "MATIC", "$MATIC", "POL", "$POL"],
+  "LINK":  ["chainlink", "LINK", "$LINK"],
+  "LTC":   ["litecoin", "LTC", "$LTC"],
+  "BCH":   ["bitcoin cash", "BCH", "$BCH"],
+  "ATOM":  ["cosmos", "ATOM", "$ATOM"],
+  "NEAR":  ["NEAR Protocol", "NEAR", "$NEAR"],
+  "ARB":   ["arbitrum", "ARB", "$ARB"],
+  "OP":    ["optimism", "OP", "$OP"],
+  "TON":   ["toncoin", "TON", "$TON"],
+  "TRX":   ["tron", "TRX", "$TRX"],
+  "SUI":   ["sui", "SUI", "$SUI"],
+  "APT":   ["aptos", "APT", "$APT"]
+}

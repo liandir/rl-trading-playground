@@ -1,0 +1,74 @@
+# Example news collection config.
+# Copy to configs/news.toml and edit. Paths are resolved relative to
+# this file's directory.
+
+data_dir = "../data/news"
+aliases_file = "news_aliases.json"
+
+relevance_threshold = 0.0
+case_sensitive_aliases = ["NEAR"]   # avoid matching the english word
+keep_raw = true
+near_dup_hamming = 4
+
+[[sources]]
+name = "cryptopanic"
+kind = "cryptopanic"
+credibility = 0.6
+enabled = true
+options = { api_key_env = "CRYPTOPANIC_API_KEY", kind = "news", public = true }
+
+[[sources]]
+name = "coindesk_rss"
+kind = "rss"
+credibility = 0.8
+enabled = true
+options = { feeds = [
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+] }
+
+[[sources]]
+name = "cointelegraph_rss"
+kind = "rss"
+credibility = 0.7
+enabled = true
+options = { feeds = ["https://cointelegraph.com/rss"] }
+
+[[sources]]
+name = "theblock_rss"
+kind = "rss"
+credibility = 0.85
+enabled = true
+options = { feeds = ["https://www.theblock.co/rss.xml"] }
+
+[[sources]]
+name = "decrypt_rss"
+kind = "rss"
+credibility = 0.7
+enabled = true
+options = { feeds = ["https://decrypt.co/feed"] }
+
+[[sources]]
+name = "newsapi"
+kind = "newsapi"
+credibility = 0.5
+enabled = false   # turn on once NEWSAPI_KEY is set
+options = { api_key_env = "NEWSAPI_KEY", language = "en", max_pages = 3 }
+
+[[sources]]
+name = "reddit_crypto"
+kind = "reddit"
+credibility = 0.4
+enabled = false   # turn on once REDDIT_* env vars are set
+options = { subreddits = [
+    "CryptoCurrency",
+    "Bitcoin",
+    "ethereum",
+    "solana",
+], mode = "new", limit = 500 }
+
+[[sources]]
+name = "twitter_crypto"
+kind = "twitter"
+credibility = 0.4
+enabled = false   # pick a backend first (see src/news/sources/twitter.py)
+options = { backend = "tweepy_v2", accounts = [], cashtags = true }
