@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.environment.discrete.longshort_hierarchical_leverage import (
+from src.environment.longshort_hierarchical_leverage import (
     BatchedLongShortHierarchicalLeverageEnv,
     LongShortHierarchicalLeverageEnv,
 )
@@ -227,7 +227,7 @@ class LongShortHierarchicalLeverageEnvTests(unittest.TestCase):
         batched_env = self.make_batched_env()
 
         init_close, init_high, init_low, init_volume, init_time = batched_market([10.0, 10.0], 0.0, dtype=self.dtype)
-        batched_obs = batched_env.reset(init_close, init_high, init_low, init_volume, init_time)
+        batched_obs = batched_env.reset(init_close, init_close, init_high, init_low, init_volume, init_time)
         scalar_states = [
             scalar_envs[0].reset(data=scalar_market(10.0, 0.0, dtype=self.dtype)),
             scalar_envs[1].reset(data=scalar_market(10.0, 0.0, dtype=self.dtype)),
@@ -256,7 +256,7 @@ class LongShortHierarchicalLeverageEnvTests(unittest.TestCase):
 
         for actions, prices, t in steps:
             close, high, low, volume, time = batched_market(prices, t, dtype=self.dtype)
-            batched_obs, batched_rewards, batched_dones = batched_env.step(actions, close, high, low, volume, time)
+            batched_obs, batched_rewards, batched_dones = batched_env.step(actions, close, close, high, low, volume, time)
 
             for idx, env in enumerate(scalar_envs):
                 state, reward, done, _ = env.step(tuple(actions[idx].tolist()), data=scalar_market(prices[idx], t, dtype=self.dtype))

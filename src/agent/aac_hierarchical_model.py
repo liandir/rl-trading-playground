@@ -326,6 +326,7 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         vf_coef: float = 0.5,
         ent_coef: float = 0.01,
         model_coef: float = 0.1,
+        model_reward_coef: float = 1.0,
         normalize_advantages: bool = True,
         advantage_type: str = "td0",
         gae_lambda: float = 0.95,
@@ -344,6 +345,7 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
             vf_coef (float): The vf coef value. Defaults to ``0.5``.
             ent_coef (float): The ent coef value. Defaults to ``0.01``.
             model_coef (float): The model coef value. Defaults to ``0.1``.
+            model_reward_coef (float): Weight of reward prediction inside the model loss. Defaults to ``1.0``.
             normalize_advantages (bool): The normalize advantages value. Defaults to ``True``.
             advantage_type (str): The advantage type value. Defaults to ``'td0'``.
             gae_lambda (float): The gae lambda value. Defaults to ``0.95``.
@@ -361,6 +363,7 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         self.vf_coef              = vf_coef
         self.ent_coef             = ent_coef
         self.model_coef           = model_coef
+        self.model_reward_coef    = float(model_reward_coef)
         self.normalize_advantages = normalize_advantages
         self.advantage_type       = advantage_type
         self.gae_lambda           = gae_lambda
@@ -734,14 +737,22 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
             if self.normalize_advantages:
                 advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-7)
 
-        return advantages, raw_adv, returns, states, actions, masks
+        return advantages, raw_adv, returns, states, actions, rewards, masks
 
-    def model_prediction_loss(self, states: torch.Tensor, actions: torch.Tensor, last_next_state: torch.Tensor, h0=None):
+    def model_prediction_loss(
+        self,
+        states: torch.Tensor,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        last_next_state: torch.Tensor,
+        h0=None,
+    ) -> dict[str, torch.Tensor]:
         """Model prediction loss for HierarchicalModelAACAgent.
 
         Args:
             states (torch.Tensor): The states value.
             actions (torch.Tensor): The actions value.
+            rewards (torch.Tensor): Environment rewards for the stored transitions.
             last_next_state (torch.Tensor): The last next state value.
             h0 (Any): The h0 value. Defaults to ``None``.
 
@@ -749,9 +760,11 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
             Any: The computed or requested result.
         """
         if not all(hasattr(self.net, name) for name in ("encode", "model_seq")):
-            return torch.zeros((), dtype=self.dtype, device=self.device)
+            zero = torch.zeros((), dtype=self.dtype, device=self.device)
+            return {"loss": zero, "latent_loss": zero, "reward_loss": zero}
 
         last_next_state = last_next_state.to(device=self.device, dtype=self.dtype)
+        rewards = rewards.to(device=self.device, dtype=self.dtype)
         if h0 is not None:
             self.net.set_states(h0, strict=False)
         all_states = torch.cat([states, last_next_state[None]], dim=0)
@@ -761,8 +774,23 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
 
         if h0 is not None:
             self.net.set_states(h0, strict=False)
-        z_pred = self.net.model_seq(z_t, actions)
-        return F.mse_loss(z_pred, z_tp1)
+        pred = self.net.model_seq(z_t, actions)
+        if isinstance(pred, dict):
+            z_pred = pred.get("next_latent", pred.get("latent"))
+            reward_pred = pred.get("reward")
+        else:
+            z_pred = pred
+            reward_pred = None
+        if z_pred is None:
+            raise ValueError("model_seq output must include next_latent/latent.")
+
+        latent_loss = F.mse_loss(z_pred, z_tp1)
+        if reward_pred is None:
+            reward_loss = torch.zeros((), dtype=self.dtype, device=self.device)
+        else:
+            reward_loss = F.smooth_l1_loss(reward_pred.reshape_as(rewards), rewards.detach())
+        loss = latent_loss + self.model_reward_coef * reward_loss
+        return {"loss": loss, "latent_loss": latent_loss, "reward_loss": reward_loss}
 
     def update(
         self,
@@ -786,7 +814,7 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
             return _empty_update_metrics()
 
         metrics = _init_update_metrics()
-        advantages, raw_adv, returns, states, actions, masks = self.compute_advantages(last_next_state, h0=h0)
+        advantages, raw_adv, returns, states, actions, rewards, masks = self.compute_advantages(last_next_state, h0=h0)
 
         logits, values = self.infer_from_seq(states, h0=h0)
         log_probs, entropy, primary_logits_m = self._policy_terms(logits, actions, masks)
@@ -794,7 +822,8 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         adv              = advantages.detach()
         policy_objective = (log_probs * adv).mean()
         value_loss       = 0.5 * (returns.detach() - values).pow(2).mean()
-        model_loss       = self.model_prediction_loss(states, actions, last_next_state, h0=h0)
+        model_losses     = self.model_prediction_loss(states, actions, rewards, last_next_state, h0=h0)
+        model_loss       = model_losses["loss"]
         loss             = (
             -policy_objective
             + self.vf_coef * value_loss
@@ -821,6 +850,8 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
             loss=loss,
         )
         metrics.setdefault("model_loss", []).append(float(model_loss.detach().cpu().item()))
+        metrics.setdefault("model_latent_loss", []).append(float(model_losses["latent_loss"].detach().cpu().item()))
+        metrics.setdefault("model_reward_loss", []).append(float(model_losses["reward_loss"].detach().cpu().item()))
 
         return metrics
 

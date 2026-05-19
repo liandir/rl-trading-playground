@@ -3,7 +3,7 @@ from typing import Dict, Tuple
 
 import torch
 
-from src.environment.discrete.longshort_hierarchical import (
+from src.environment.longshort_hierarchical import (
     _split_hier_action,
     _split_hier_actions_batched,
 )

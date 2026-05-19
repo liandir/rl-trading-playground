@@ -157,7 +157,7 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         self.value_head = self._build_head(self.global_dim, 1, self.value_recurrent, hidden_dims_value)
         self.model_head = self._build_head(
             self.global_dim + self.action_encoding_dim,
-            self.latent_dim,
+            self.latent_dim + 1,
             self.model_recurrent,
             hidden_dims_model,
         )
@@ -302,12 +302,18 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         global_h = self._global(z)
         return self.action(z, global_h=global_h), self.value(z, global_h=global_h)
 
+    def _split_model_output(self, y: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Split model-head output into next latent state and reward."""
+        next_z = y[..., : self.latent_dim]
+        reward = y[..., self.latent_dim]
+        return {"next_latent": next_z, "reward": reward}
+
     def model(
         self,
         z: torch.Tensor,
         action: torch.Tensor,
         global_h: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> dict[str, torch.Tensor]:
         """Model for FlatPerAssetModelNetwork.
 
         Args:
@@ -316,15 +322,16 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
             global_h (torch.Tensor | None): The global h value. Defaults to ``None``.
 
         Returns:
-            torch.Tensor: The computed or requested result.
+            dict[str, torch.Tensor]: Predicted ``next_latent`` and ``reward``.
         """
         if global_h is None:
             global_h = self._global(z)
         action_enc = self._encode_action(action.reshape(-1, 2).to(device=z.device))
         model_in = torch.cat([global_h.reshape(-1, self.global_dim), action_enc], dim=-1)
-        return self.model_head(model_in).reshape(z.shape)
+        out = self.model_head(model_in).reshape(*z.shape[:-1], self.latent_dim + 1)
+        return self._split_model_output(out)
 
-    def model_seq(self, z_seq: torch.Tensor, action_seq: torch.Tensor) -> torch.Tensor:
+    def model_seq(self, z_seq: torch.Tensor, action_seq: torch.Tensor) -> dict[str, torch.Tensor]:
         """Model seq for FlatPerAssetModelNetwork.
 
         Args:
@@ -332,7 +339,7 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
             action_seq (torch.Tensor): The action seq value.
 
         Returns:
-            torch.Tensor: The computed or requested result.
+            dict[str, torch.Tensor]: Predicted ``next_latent`` and ``reward``.
         """
         if z_seq.shape[:-1] != action_seq.shape[:-1] or action_seq.shape[-1] != 2:
             raise ValueError(
@@ -341,7 +348,8 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
             )
         global_seq = self.global_branch.forward_seq(z_seq)
         action_enc = self._encode_action(action_seq.to(device=z_seq.device))
-        return self.model_head.forward_seq(torch.cat([global_seq, action_enc], dim=-1))
+        out = self.model_head.forward_seq(torch.cat([global_seq, action_enc], dim=-1))
+        return self._split_model_output(out)
 
     def model_step(self, z: torch.Tensor, action: torch.Tensor) -> dict[str, torch.Tensor]:
         """Model step for FlatPerAssetModelNetwork.
@@ -353,8 +361,9 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         Returns:
             dict[str, torch.Tensor]: The computed or requested result.
         """
-        next_z = self.model(z, action)
-        reward = torch.zeros(next_z.shape[:-1], dtype=next_z.dtype, device=next_z.device)
+        pred = self.model(z, action)
+        next_z = pred["next_latent"]
+        reward = pred["reward"]
         done = torch.zeros_like(reward)
         return {"next_latent": next_z, "reward": reward, "done": done}
 
