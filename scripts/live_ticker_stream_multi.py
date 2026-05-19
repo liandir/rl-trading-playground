@@ -21,6 +21,15 @@ async def demo() -> None:
 
 
 def get_snapshot_sync(pairs, timeout: float = 5.0):
+    """Return one live snapshot for multiple pairs.
+
+    Args:
+        pairs (list): Pair symbols or codes to stream.
+        timeout (float): Maximum wait time in seconds. Defaults to ``5.0``.
+
+    Returns:
+        dict: Latest pair snapshots keyed by pair.
+    """
     async def _runner():
         async with KrakenLiveFeed(pairs, depth=10) as feed:
             await feed.wait_until_ready(timeout=timeout)

@@ -1,3 +1,4 @@
+"""Longshort leverage utilities for trading environment state, action, reward, and simulation logic."""
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
@@ -44,6 +45,11 @@ class State:
     side_rel: torch.Tensor
 
     def to_tensor(self) -> torch.Tensor:
+        """Convert the value to tensor.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         globals_block = torch.cat([
             self.time.flatten(),
             self.cash_rel.reshape(1),
@@ -68,67 +74,176 @@ class State:
 
 
 class StateHistory:
+    """StateHistory implementation for trading environment state, action, reward, and simulation logic."""
     def __init__(self):
+        """Initialize the instance.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states: list[State] = []
 
     def append(self, state: State):
+        """Append for StateHistory.
+
+        Args:
+            state (State): The state value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states.append(state)
 
     def get_time(self) -> torch.Tensor:
+        """Return the time.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.time for s in self.states])
 
     def get_cash_rel(self) -> torch.Tensor:
+        """Return the cash rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.cash_rel for s in self.states])
 
     def get_rho(self) -> torch.Tensor:
+        """Return the rho.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.rho for s in self.states])
 
     def get_gross_leverage(self) -> torch.Tensor:
+        """Return the gross leverage.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.gross_leverage for s in self.states])
 
     def get_margin_buffer(self) -> torch.Tensor:
+        """Return the margin buffer.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.margin_buffer for s in self.states])
 
     def get_p_rel(self) -> torch.Tensor:
+        """Return the p rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.p_rel for s in self.states])
 
     def get_v_rel(self) -> torch.Tensor:
+        """Return the v rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.v_rel for s in self.states])
 
     def get_vol_rel(self) -> torch.Tensor:
+        """Return the vol rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.vol_rel for s in self.states])
 
     def get_body_smooth(self) -> torch.Tensor:
+        """Return the body smooth.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.body_smooth for s in self.states])
 
     def get_hl_rel(self) -> torch.Tensor:
+        """Return the hl rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.hl_rel for s in self.states])
 
     def get_body_rel(self) -> torch.Tensor:
+        """Return the body rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.body_rel for s in self.states])
 
     def get_ret_rel(self) -> torch.Tensor:
+        """Return the ret rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.ret_rel for s in self.states])
 
     def get_upper_wick_rel(self) -> torch.Tensor:
+        """Return the upper wick rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.upper_wick_rel for s in self.states])
 
     def get_lower_wick_rel(self) -> torch.Tensor:
+        """Return the lower wick rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.lower_wick_rel for s in self.states])
 
     def get_x_rel(self) -> torch.Tensor:
+        """Return the x rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.x_rel for s in self.states])
 
     def get_c_rel(self) -> torch.Tensor:
+        """Return the c rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.c_rel for s in self.states])
 
     def get_unrl_rel(self) -> torch.Tensor:
+        """Return the unrl rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.unrl_rel for s in self.states])
 
     def get_side_rel(self) -> torch.Tensor:
+        """Return the side rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.side_rel for s in self.states])
 
     def to_tensor(self) -> torch.Tensor:
+        """Convert the value to tensor.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.to_tensor() for s in self.states])
 
 
@@ -163,6 +278,33 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
+        """Initialize the instance.
+
+        Args:
+            N (int): The n value.
+            C0 (float): The c0 value.
+            tau_p (torch.Tensor): The tau p value.
+            bankruptcy_threshold (float): The bankruptcy threshold value. Defaults to ``1.0``.
+            transaction_eps (float): The transaction eps value. Defaults to ``0.01``.
+            use_dollar_volume (bool): The use dollar volume value. Defaults to ``True``.
+            save_history (bool): The save history value. Defaults to ``False``.
+            open_fee (float): The open fee value. Defaults to ``1.0``.
+            close_fee (float): The close fee value. Defaults to ``1.0``.
+            tax_rate (float): The tax rate value. Defaults to ``0.26``.
+            min_open_dollars (float): The min open dollars value. Defaults to ``10.0``.
+            val_coeff (float): The val coeff value. Defaults to ``1.0``.
+            roi_coeff (float): The roi coeff value. Defaults to ``1.0``.
+            reward_mode (str): The reward mode value. Defaults to ``'log'``.
+            done_reward_penalty (float): The done reward penalty value. Defaults to ``1.0``.
+            max_leverage (float): The max leverage value. Defaults to ``2.0``.
+            maintenance_margin_ratio (float | None): The maintenance margin ratio value. Defaults to ``None``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            device (str | torch.device | None): The device value. Defaults to ``None``.
+            eps (float): The eps value. Defaults to ``1e-08``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(
             N=N,
             C0=C0,
@@ -200,22 +342,47 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
 
     @property
     def gross_exposure(self) -> torch.Tensor:
+        """Gross exposure for LeveragedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return (torch.abs(self.pos_units) * self.p).sum()
 
     @property
     def gross_leverage(self) -> torch.Tensor:
+        """Gross leverage for LeveragedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return self.gross_exposure / self.V.clamp(min=self.eps)
 
     @property
     def maintenance_requirement(self) -> torch.Tensor:
+        """Maintenance requirement for LeveragedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return self.maintenance_margin_ratio * self.gross_exposure
 
     @property
     def margin_buffer(self) -> torch.Tensor:
+        """Margin buffer for LeveragedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         V = self.V
         return (V - self.maintenance_requirement) / V.clamp(min=self.eps)
 
     def _get_state(self) -> State:
+        """Return the current state snapshot.
+
+        Returns:
+            State: The computed or requested result.
+        """
         t_vec = self._compute_time_vector().to(self.dtype)
         cash_rel, x_rel = self._compute_value_weights()
         c_rel, rho = self._compute_cost_weights()
@@ -254,6 +421,21 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         *,
         data: dict | None = None,
     ) -> State:
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            data_or_close (Any): The data or close value. Defaults to ``None``.
+            high (Any): The high value. Defaults to ``None``.
+            low (Any): The low value. Defaults to ``None``.
+            volume (Any): The volume value. Defaults to ``None``.
+            time (Any): The time value. Defaults to ``None``.
+            C0 (Optional[float]): The c0 value. Defaults to ``None``.
+            open_ (Any): The open value. Defaults to ``None``.
+            data (dict | None): The data value. Defaults to ``None``.
+
+        Returns:
+            State: The computed or requested result.
+        """
         state = super().reset(
             data_or_close=data_or_close,
             high=high,
@@ -276,6 +458,17 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         gross_exposure: float,
         frac: float,
     ) -> bool:
+        """Can open from snapshot for LeveragedMultiCurrencyEnv.
+
+        Args:
+            cash_available (float): The cash available value.
+            portfolio_value (float): The portfolio value value.
+            gross_exposure (float): The gross exposure value.
+            frac (float): The frac value.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         budget = frac * cash_available
         margin = budget - self.o_fee
         if not (budget > self.o_fee and margin >= self.min_open_dollars):
@@ -287,6 +480,14 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         return value_after_open + self.eps >= maintenance_after_open
 
     def _full_close_snapshot(self, k: int) -> tuple[bool, float, float, float]:
+        """Full close snapshot for LeveragedMultiCurrencyEnv.
+
+        Args:
+            k (int): The k value.
+
+        Returns:
+            tuple[bool, float, float, float]: The computed or requested result.
+        """
         cash = float(self.C.item())
         portfolio_value = float(self.V.item())
         gross_exposure = float(self.gross_exposure.item())
@@ -313,6 +514,11 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         return True, cash_after_close, value_after_close, gross_after_close
 
     def _cleanup_dust(self) -> None:
+        """Cleanup dust for LeveragedMultiCurrencyEnv.
+
+        Returns:
+            None: This function does not return a value.
+        """
         dust = self.committed < self.transaction_eps
         self.pos_units[dust] = 0.0
         self.committed[dust] = 0.0
@@ -320,6 +526,16 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         self.C = torch.clamp(self.C, min=0.0)
 
     def _close_position(self, k: int, frac: float = 1.0, *, force: bool = False) -> bool:
+        """Close position for LeveragedMultiCurrencyEnv.
+
+        Args:
+            k (int): The k value.
+            frac (float): The frac value. Defaults to ``1.0``.
+            force (bool): The force value. Defaults to ``False``.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         units = self.pos_units[k]
         if abs(float(units.item())) <= self.eps:
             return False
@@ -350,6 +566,16 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         return True
 
     def _open_position(self, k: int, side: int, frac: float = 1.0) -> bool:
+        """Open position for LeveragedMultiCurrencyEnv.
+
+        Args:
+            k (int): The k value.
+            side (int): The side value.
+            frac (float): The frac value. Defaults to ``1.0``.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         cash = float(self.C.item())
         if not self._can_open_from_snapshot(
             cash_available=cash,
@@ -386,6 +612,11 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         return True
 
     def _liquidate_all_positions(self) -> bool:
+        """Liquidate all positions for LeveragedMultiCurrencyEnv.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         liquidated = False
         for k in range(self.N):
             liquidated = self._close_position(k, frac=1.0, force=True) or liquidated
@@ -393,6 +624,11 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         return liquidated
 
     def valid_action_mask(self) -> torch.Tensor:
+        """Valid action mask for LeveragedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         mask = torch.zeros(self.action_dim, dtype=torch.bool, device=self._state_device())
         mask[0] = True
 
@@ -444,6 +680,21 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         *,
         data: dict | None = None,
     ) -> Tuple[State, float, bool, Dict]:
+        """Advance the simulation by one step.
+
+        Args:
+            a (Any): The a value.
+            data_or_close (Any): The data or close value. Defaults to ``None``.
+            high (Any): The high value. Defaults to ``None``.
+            low (Any): The low value. Defaults to ``None``.
+            volume (Any): The volume value. Defaults to ``None``.
+            time (Any): The time value. Defaults to ``None``.
+            open_ (Any): The open value. Defaults to ``None``.
+            data (dict | None): The data value. Defaults to ``None``.
+
+        Returns:
+            Tuple[State, float, bool, Dict]: The computed or requested result.
+        """
         action_info, valid_trade = self._trade(a)
         self._update(
             close_or_data=data_or_close,
@@ -492,6 +743,7 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
 
 
 class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
+    """BatchedLeveragedMultiCurrencyEnv implementation for trading environment state, action, reward, and simulation logic."""
     def __init__(
         self,
         B: int,
@@ -516,6 +768,33 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
+        """Initialize the instance.
+
+        Args:
+            B (int): The b value.
+            N (int): The n value.
+            C0 (float): The c0 value.
+            tau_p (torch.Tensor): The tau p value.
+            bankruptcy_threshold (float): The bankruptcy threshold value. Defaults to ``1.0``.
+            transaction_eps (float): The transaction eps value. Defaults to ``0.01``.
+            use_dollar_volume (bool): The use dollar volume value. Defaults to ``True``.
+            open_fee (float): The open fee value. Defaults to ``1.0``.
+            close_fee (float): The close fee value. Defaults to ``1.0``.
+            tax_rate (float): The tax rate value. Defaults to ``0.26``.
+            min_open_dollars (float): The min open dollars value. Defaults to ``10.0``.
+            val_coeff (float): The val coeff value. Defaults to ``1.0``.
+            roi_coeff (float): The roi coeff value. Defaults to ``1.0``.
+            reward_mode (str): The reward mode value. Defaults to ``'log'``.
+            done_reward_penalty (float): The done reward penalty value. Defaults to ``1.0``.
+            max_leverage (float): The max leverage value. Defaults to ``2.0``.
+            maintenance_margin_ratio (float | None): The maintenance margin ratio value. Defaults to ``None``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            device (str | torch.device | None): The device value. Defaults to ``None``.
+            eps (float): The eps value. Defaults to ``1e-08``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(
             B=B,
             N=N,
@@ -551,22 +830,47 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
 
     @property
     def gross_exposure(self) -> torch.Tensor:
+        """Gross exposure for BatchedLeveragedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return (torch.abs(self.pos_units) * self.p).sum(dim=-1)
 
     @property
     def gross_leverage(self) -> torch.Tensor:
+        """Gross leverage for BatchedLeveragedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return self.gross_exposure / self.V.clamp(min=self.eps)
 
     @property
     def maintenance_requirement(self) -> torch.Tensor:
+        """Maintenance requirement for BatchedLeveragedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return self.maintenance_margin_ratio * self.gross_exposure
 
     @property
     def margin_buffer(self) -> torch.Tensor:
+        """Margin buffer for BatchedLeveragedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         V = self.V
         return (V - self.maintenance_requirement) / V.clamp(min=self.eps)
 
     def _obs(self):
+        """Obs for BatchedLeveragedMultiCurrencyEnv.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         B, N = self.B, self.N
         V = self.V.clamp(min=self.eps)
 
@@ -626,6 +930,17 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         gross_exposure: torch.Tensor,
         frac: torch.Tensor,
     ) -> torch.Tensor:
+        """Open is valid for BatchedLeveragedMultiCurrencyEnv.
+
+        Args:
+            cash_available (torch.Tensor): The cash available value.
+            portfolio_value (torch.Tensor): The portfolio value value.
+            gross_exposure (torch.Tensor): The gross exposure value.
+            frac (torch.Tensor): The frac value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         budget = frac * cash_available
         margin = budget - self.o_fee
         value_after_open = portfolio_value - self.o_fee
@@ -638,6 +953,11 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         )
 
     def _full_close_snapshots(self) -> Dict[str, torch.Tensor]:
+        """Full close snapshots for BatchedLeveragedMultiCurrencyEnv.
+
+        Returns:
+            Dict[str, torch.Tensor]: The computed or requested result.
+        """
         B, N = self.B, self.N
         eps = self.eps
 
@@ -681,6 +1001,11 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         }
 
     def _cleanup_dust(self) -> None:
+        """Cleanup dust for BatchedLeveragedMultiCurrencyEnv.
+
+        Returns:
+            None: This function does not return a value.
+        """
         dust = self.committed < self.transaction_eps
         self.pos_units = self.pos_units.masked_fill(dust, 0.0)
         self.committed = self.committed.masked_fill(dust, 0.0)
@@ -688,6 +1013,14 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         self.C = self.C.clamp(min=0.0)
 
     def _trade(self, actions) -> None:
+        """Trade for BatchedLeveragedMultiCurrencyEnv.
+
+        Args:
+            actions (Any): The actions value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         B, N = self.B, self.N
         b = self._b_idx
         actions_d, frac = self._split_actions(actions)
@@ -793,6 +1126,14 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         self._cleanup_dust()
 
     def _liquidate_breached(self, breached: torch.Tensor) -> torch.Tensor:
+        """Liquidate breached for BatchedLeveragedMultiCurrencyEnv.
+
+        Args:
+            breached (torch.Tensor): The breached value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         to_liquidate = breached[:, None] & (torch.abs(self.pos_units) > self.eps)
         if not bool(to_liquidate.any().item()):
             return torch.zeros(self.B, dtype=torch.bool, device=self._state_device())
@@ -818,6 +1159,20 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         return to_liquidate.any(dim=1)
 
     def step(self, actions, open_, close, high, low, volume, time):
+        """Advance the simulation by one step.
+
+        Args:
+            actions (Any): The actions value.
+            open_ (Any): The open value.
+            close (Any): The close value.
+            high (Any): The high value.
+            low (Any): The low value.
+            volume (Any): The volume value.
+            time (Any): The time value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         self._trade(actions)
         self._update(open_, close, high, low, volume, time)
         breached = self.V < self.maintenance_requirement
@@ -829,6 +1184,11 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         return self._obs(), rewards, dones
 
     def valid_action_mask(self):
+        """Valid action mask for BatchedLeveragedMultiCurrencyEnv.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         B, N = self.B, self.N
         snapshots = self._full_close_snapshots()
 

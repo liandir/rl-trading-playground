@@ -1,3 +1,4 @@
+"""Auxiliary per asset action value utilities for neural network architectures and reusable model components."""
 import torch
 
 from src.network.core.per_asset import BaseFlatPerAssetActionValueNetwork
@@ -26,6 +27,18 @@ class AuxiliaryPerAssetActionValueNetwork(BaseFlatPerAssetActionValueNetwork):
         critic_type: str = "v",
         **kwargs,
     ):
+        """Initialize the instance.
+
+        Args:
+            *args (Any): The args value.
+            aux_horizons (Any): The aux horizons value. Defaults to ``(1, 5, 20)``.
+            hidden_dims_aux (Any): The hidden dims aux value. Defaults to ``None``.
+            critic_type (str): The critic type value. Defaults to ``'v'``.
+            **kwargs (Any): The kwargs value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         critic_type = str(critic_type).lower()
         if critic_type not in ("v", "q"):
             raise ValueError(f"critic_type must be 'v' or 'q', got '{critic_type}'.")
@@ -64,6 +77,14 @@ class AuxiliaryPerAssetActionValueNetwork(BaseFlatPerAssetActionValueNetwork):
         )
 
     def _build_aux(self, h: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Build the aux.
+
+        Args:
+            h (torch.Tensor): The h value.
+
+        Returns:
+            dict[str, torch.Tensor]: The computed or requested result.
+        """
         return {
             "reward": self.aux_reward(h).squeeze(-1),
             "asset_ret": self.aux_asset_ret(h).view(h.shape[0], self.num_assets, self.n_aux_horizons),
@@ -73,12 +94,29 @@ class AuxiliaryPerAssetActionValueNetwork(BaseFlatPerAssetActionValueNetwork):
         }
 
     def _critic(self, h: torch.Tensor, prefix_shape: torch.Size) -> torch.Tensor:
+        """Critic for AuxiliaryPerAssetActionValueNetwork.
+
+        Args:
+            h (torch.Tensor): The h value.
+            prefix_shape (torch.Size): The prefix shape value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         critic = self.value(h)
         if self.critic_type == "q":
             return critic.reshape(prefix_shape + (self.action_dim,))
         return critic.squeeze(-1).reshape(prefix_shape)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        """Compute the forward pass.
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: The computed or requested result.
+        """
         shape = x.shape
         x_flat = x.reshape(-1, self.state_dim)
         z = self._encode_flat(x_flat)
@@ -97,6 +135,14 @@ class AuxiliaryPerAssetActionValueNetwork(BaseFlatPerAssetActionValueNetwork):
         return logits, values, aux
 
     def forward_seq(self, x_seq: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        """Compute a forward pass over a sequence.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: The computed or requested result.
+        """
         if x_seq.dim() == 2:
             if x_seq.shape[-1] != self.state_dim:
                 raise ValueError(f"Expected last dim {self.state_dim}, got {x_seq.shape[-1]}.")

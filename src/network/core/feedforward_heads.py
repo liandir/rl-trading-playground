@@ -1,10 +1,21 @@
+"""Feedforward heads utilities for neural network architectures and reusable model components."""
 import torch
 
 from src.network.core.vanilla import VanillaNetwork
 
 
 class FeedForwardActionValueNetwork(torch.nn.Module):
-    """Shared feedforward trunk with categorical-policy and scalar-value heads."""
+    """
+    Shared feedforward trunk with categorical-policy and scalar-value heads.
+
+    The trunk maps state $s$ to latent feature $z=f_\\theta(s)$. The actor and
+    critic heads then compute
+    \\[
+        \\ell(s) = A_\\psi(z), \\qquad V(s) = C_\\omega(z),
+    \\]
+    where $\\ell(s)$ are unnormalized action logits and $V(s)$ is a scalar
+    value estimate.
+    """
 
     name = "action_value"
 
@@ -17,6 +28,19 @@ class FeedForwardActionValueNetwork(torch.nn.Module):
         hidden_dims_value=None,
         activation=torch.relu,
     ):
+        """Initialize the instance.
+
+        Args:
+            state_dim (Any): The state dim value.
+            action_dim (Any): The action dim value.
+            hidden_dims (Any): The hidden dims value. Defaults to ``None``.
+            hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
+            hidden_dims_value (Any): The hidden dims value value. Defaults to ``None``.
+            activation (Any): The activation value. Defaults to ``torch.relu``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         hidden_dims = hidden_dims or []
         hidden_dims_actor = hidden_dims_actor or []
@@ -36,6 +60,14 @@ class FeedForwardActionValueNetwork(torch.nn.Module):
         self.value = VanillaNetwork(prev, 1, hidden_dims=hidden_dims_value, activation=activation)
 
     def forward(self, x):
+        """Compute the forward pass.
+
+        Args:
+            x (Any): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         shape = x.shape
         z = x.reshape(-1, self.state_dim)
         for layer in self.layers:
@@ -45,21 +77,66 @@ class FeedForwardActionValueNetwork(torch.nn.Module):
         return logits, values
 
     def reset(self, batch_size: int = 1):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return None
 
     def forward_seq(self, x_seq):
+        """Compute a forward pass over a sequence.
+
+        Args:
+            x_seq (Any): The x seq value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return self.forward(x_seq)
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        """Return a snapshot of recurrent states.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         return {}
 
     def set_states(self, states: dict | None, clone: bool = True, detach: bool = True, strict: bool = True):
+        """Restore recurrent states from a snapshot.
+
+        Args:
+            states (dict | None): The states value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if strict and states not in ({}, None):
             raise ValueError("Feedforward ActionValueNetwork has no recurrent state.")
 
 
 class FeedForwardActionQNetwork(torch.nn.Module):
-    """Shared feedforward trunk with categorical-policy and discrete-Q heads."""
+    """
+    Shared feedforward trunk with categorical-policy and discrete-Q heads.
+
+    From state $s$, the shared trunk forms $z=f_\\theta(s)$. The policy head
+    produces logits $\\ell(s)$, while the Q head estimates one value per
+    discrete action:
+    \\[
+        Q(s, a_i) = Q_\\omega(z)_i,\\qquad i=1,\\dots,|\\mathcal{A}|.
+    \\]
+    """
 
     name = "action_q"
 
@@ -72,6 +149,19 @@ class FeedForwardActionQNetwork(torch.nn.Module):
         hidden_dims_q=None,
         activation=torch.relu,
     ):
+        """Initialize the instance.
+
+        Args:
+            state_dim (Any): The state dim value.
+            action_dim (Any): The action dim value.
+            hidden_dims (Any): The hidden dims value. Defaults to ``None``.
+            hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
+            hidden_dims_q (Any): The hidden dims q value. Defaults to ``None``.
+            activation (Any): The activation value. Defaults to ``torch.relu``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         hidden_dims = hidden_dims or []
         hidden_dims_actor = hidden_dims_actor or []
@@ -101,6 +191,14 @@ class FeedForwardActionQNetwork(torch.nn.Module):
         )
 
     def forward(self, x):
+        """Compute the forward pass.
+
+        Args:
+            x (Any): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         shape = x.shape
         z = x.view(-1, self.state_dim)
         for layer in self.layers:
@@ -110,14 +208,50 @@ class FeedForwardActionQNetwork(torch.nn.Module):
         return logits, q_values
 
     def reset(self, batch_size: int = 1):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return None
 
     def forward_seq(self, x_seq):
+        """Compute a forward pass over a sequence.
+
+        Args:
+            x_seq (Any): The x seq value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return self.forward(x_seq)
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        """Return a snapshot of recurrent states.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         return {}
 
     def set_states(self, states: dict | None, clone: bool = True, detach: bool = True, strict: bool = True):
+        """Restore recurrent states from a snapshot.
+
+        Args:
+            states (dict | None): The states value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if strict and states not in ({}, None):
             raise ValueError("Feedforward ActionQNetwork has no recurrent state.")

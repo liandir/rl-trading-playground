@@ -1,3 +1,4 @@
+"""Per asset utilities for neural network architectures and reusable model components."""
 import torch
 
 from src.network.core.recurrent import RecurrentNetwork, _build_recurrent_cell
@@ -7,6 +8,18 @@ from src.network.core.vanilla import VanillaNetwork
 class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
     """
     Per-asset extractor → flatten → parallel (recurrent | feedforward) → heads.
+
+    For asset features $a_i$ and global features $g$, each asset token is
+    encoded by a shared extractor
+    \\[
+        e_i = E_\\theta([a_i, g]), \\qquad i=1,\\dots,N.
+    \\]
+    The flattened token vector $e=[e_1,\\dots,e_N]$ is sent through recurrent
+    and feedforward branches, then the combined representation $h$ parameterizes
+    actor logits and value:
+    \\[
+        \\ell = A_\\psi(h), \\qquad V = C_\\omega(h).
+    \\]
 
     State layout (matches src.environment.generic.longshort):
         state_dim = d_global + num_assets * d_asset
@@ -65,6 +78,30 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
     ):
+        """Initialize the instance.
+
+        Args:
+            num_assets (int): The num assets value.
+            d_asset (int): The d asset value.
+            d_global (int): The d global value.
+            action_dim (int): The action dim value.
+            d_model (int): The d model value. Defaults to ``64``.
+            hidden_dims_asset (Any): The hidden dims asset value. Defaults to ``None``.
+            d_mem (int): The d mem value. Defaults to ``64``.
+            d_ff (int): The d ff value. Defaults to ``64``.
+            hidden_dims_mem (Any): The hidden dims mem value. Defaults to ``None``.
+            hidden_dims_ff (Any): The hidden dims ff value. Defaults to ``None``.
+            hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
+            hidden_dims_value (Any): The hidden dims value value. Defaults to ``None``.
+            combine_mode (str): The combine mode value. Defaults to ``'concat'``.
+            activation (Any): The activation value. Defaults to ``torch.tanh``.
+            recurrent_activation (Any): The recurrent activation value. Defaults to ``torch.tanh``.
+            recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
+            recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         if combine_mode not in ("concat", "add"):
             raise ValueError(f"combine_mode must be 'concat' or 'add', got '{combine_mode}'.")
@@ -132,7 +169,14 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
         self.value = VanillaNetwork(head_in, 1, hidden_dims=hidden_dims_value, activation=activation)
 
     def _encode_flat(self, x_flat: torch.Tensor) -> torch.Tensor:
-        """x_flat (B, state_dim) → (B, N * d_model) — per-asset MLP then flatten."""
+        """x_flat (B, state_dim) → (B, N * d_model) — per-asset MLP then flatten.
+
+        Args:
+            x_flat (torch.Tensor): The x flat value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B = x_flat.shape[0]
         globals_feat = x_flat[:, : self.d_global]                                          # (B, d_global)
         asset_feat = x_flat[:, self.d_global :].view(B, self.num_assets, self.d_asset)     # (B, N, d_asset)
@@ -142,16 +186,41 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
         return tokens.reshape(B, -1)                                                        # (B, N * d_model)
 
     def _combine(self, h_mem: torch.Tensor, h_ff: torch.Tensor) -> torch.Tensor:
+        """Combine for BaseFlatPerAssetActionValueNetwork.
+
+        Args:
+            h_mem (torch.Tensor): The h mem value.
+            h_ff (torch.Tensor): The h ff value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if self.combine_mode == "add":
             return h_mem + h_ff
         return torch.cat([h_mem, h_ff], dim=-1)
 
     def reset(self, batch_size: int = 1):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
         self.recurrent.reset(batch_size, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute the forward pass.
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         shape = x.shape
         x_flat = x.reshape(-1, self.state_dim)              # (B', state_dim)
         z = self._encode_flat(x_flat)                       # (B', N * d_model)
@@ -163,6 +232,14 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
         return logits, values
 
     def forward_seq(self, x_seq: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute a forward pass over a sequence.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         if x_seq.dim() == 2:
             if x_seq.shape[-1] != self.state_dim:
                 raise ValueError(f"Expected last dim {self.state_dim}, got {x_seq.shape[-1]}.")
@@ -201,6 +278,15 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
         return logits_seq, values_seq
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        """Return a snapshot of recurrent states.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         if self._recurrent_is_network:
             rec_state = self.recurrent.get_states(clone=clone, detach=detach)
         else:
@@ -208,6 +294,17 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
         return {"recurrent": rec_state}
 
     def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+        """Restore recurrent states from a snapshot.
+
+        Args:
+            states (dict): The states value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if strict and "recurrent" not in states:
             raise KeyError("Missing key 'recurrent' in states snapshot.")
         rec_state = states.get("recurrent")
@@ -215,4 +312,3 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
             self.recurrent.set_states(rec_state, clone=clone, detach=detach, strict=strict)
         else:
             self.recurrent.set_state(rec_state, clone=clone, detach=detach)
-

@@ -1,3 +1,4 @@
+"""Tagging utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 import math
@@ -9,6 +10,7 @@ from .models import AssetMention
 
 @dataclass(slots=True)
 class _CompiledAlias:
+    """_CompiledAlias implementation for news collection, tagging, deduplication, and storage utilities."""
     symbol: str
     pattern: re.Pattern[str]
 
@@ -29,6 +31,17 @@ class AliasTagger:
         threshold: float = 0.0,
         saturation: int = 6,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            aliases (dict[str, list[str]]): The aliases value.
+            case_sensitive (tuple[str, ...]): The case sensitive value. Defaults to ``()``.
+            threshold (float): The threshold value. Defaults to ``0.0``.
+            saturation (int): The saturation value. Defaults to ``6``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self._compiled: list[_CompiledAlias] = []
         cs = {s.upper() for s in case_sensitive}
         for sym, words in aliases.items():
@@ -48,6 +61,16 @@ class AliasTagger:
         body: str | None = None,
         pre_tagged: list[str] | None = None,
     ) -> list[AssetMention]:
+        """Tag for AliasTagger.
+
+        Args:
+            title (str): The title value.
+            body (str | None): The body value. Defaults to ``None``.
+            pre_tagged (list[str] | None): The pre tagged value. Defaults to ``None``.
+
+        Returns:
+            list[AssetMention]: The computed or requested result.
+        """
         haystack = title if not body else f"{title}\n{body}"
         counts: dict[str, int] = {}
         for c in self._compiled:

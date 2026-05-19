@@ -23,6 +23,12 @@ def resolve_pair_codes(pair_like: str):
     Return a tuple: (api_pair_code_for_rest, human_wsname_for_printing).
     - Input like 'BTC/USD', 'XBTUSD', 'eth-eur' all okay.
     - We prefer REST altname (e.g., 'XBTUSD'); if missing, fall back to the dict key.
+
+    Args:
+        pair_like (str): Pair symbol or code to resolve.
+
+    Returns:
+        tuple: REST pair code and human-readable display name.
     """
     pair_like = pair_like.upper().replace("-", "/").strip()
     base, quote = [p.strip() for p in pair_like.split("/")] if "/" in pair_like else (pair_like, None)
@@ -68,7 +74,15 @@ def resolve_pair_codes(pair_like: str):
     raise RuntimeError(f"Cannot resolve pair '{pair_like}'. Is it listed on Kraken Spot?")
 
 def fetch_order_book(api_pair_code: str, depth: int = 5):
-    """Return (response_key, bids, asks) using REST pair code like 'XBTUSD'."""
+    """Return order book rows for a REST pair code.
+
+    Args:
+        api_pair_code (str): Kraken REST pair code like ``XBTUSD``.
+        depth (int): Number of rows to request. Defaults to ``5``.
+
+    Returns:
+        tuple: Response key, bid rows, and ask rows.
+    """
     params = {"pair": api_pair_code, "count": str(int(depth))}
     url = API + "/0/public/Depth?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": "kraken-live-book/1.1"})
@@ -84,9 +98,28 @@ def fetch_order_book(api_pair_code: str, depth: int = 5):
     return key, bids, asks
 
 def fmt_row(side, row):
+    """Format one order book row for terminal output.
+
+    Args:
+        side (str): Display label for the row side.
+        row (list): Parsed order book row.
+
+    Returns:
+        str: Formatted row text.
+    """
     return f"{side:<4} {row[0]:>12,.2f}  size {row[1]:>10.6f}"
 
 def main(pair_like: str = "BTC/USD", depth: int = 5, interval_sec: float = 1.0):
+    """Poll and print a live order book summary.
+
+    Args:
+        pair_like (str): Pair symbol or code to display. Defaults to ``"BTC/USD"``.
+        depth (int): Number of book rows to print. Defaults to ``5``.
+        interval_sec (float): Delay between polls in seconds. Defaults to ``1.0``.
+
+    Returns:
+        None: This function does not return a value.
+    """
     api_code, pretty = resolve_pair_codes(pair_like)
     print(f"Resolved '{pair_like}' → REST code '{api_code}'  (display: {pretty})\n(CTRL+C to stop)\n")
     

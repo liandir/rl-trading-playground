@@ -1,3 +1,4 @@
+"""Data utilities for multi-currency trading."""
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Tuple
@@ -22,6 +23,14 @@ DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
 
 def read_historical_data(path):
+    """Read historical data for multi-currency trading.
+
+    Args:
+        path (Any): The path value.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     data = []
 
     with open(path, 'r') as f:
@@ -50,6 +59,16 @@ def load_data(
         base_path: str = "../data/Kraken_OHLCVT/",
         interval: int = 1
     ):
+    """Load the data.
+
+    Args:
+        pairs (Any): The pairs value.
+        base_path (str): The base path value. Defaults to ``'../data/Kraken_OHLCVT/'``.
+        interval (int): The interval value. Defaults to ``1``.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     data = {}
 
     for name, symbol in pairs.items():
@@ -65,6 +84,15 @@ def load_data(
 
 
 def align_data(data, interval):
+    """Align data for multi-currency trading.
+
+    Args:
+        data (Any): The data value.
+        interval (Any): The interval value.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     aligned_data, dt = {}, timedelta(minutes=interval)
 
     print("Determining common time range for alignment...")
@@ -87,7 +115,7 @@ def align_data(data, interval):
                 new_data.append({**filtered_data[i-1].copy(), 'time': t})
             times.append(t)
             t += dt
-                
+
         aligned_data[name] = new_data
 
     return aligned_data, times
@@ -99,13 +127,21 @@ def align_data(
     include_end: bool = False,
     allow_backfill: bool = False,   # if False, leave leading gaps as None until first point
 ) -> Tuple[Dict[str, List[dict]], List[datetime]]:
-    """
-    Aligns multiple time-ordered series of dicts (with 'time' keys) to a common grid.
+    """Aligns multiple time-ordered series of dicts (with 'time' keys) to a common grid.
 
     - Forward-fills between observed points.
     - Optionally backfills (use first point) before the first observation.
     - Computes a common range across series.
     - Safe against empty series or missing overlap.
+
+    Args:
+        data (Dict[str, List[dict]]): The data value.
+        interval_minutes (int): The interval minutes value.
+        include_end (bool): The include end value. Defaults to ``False``.
+        allow_backfill (bool): The allow backfill value. Defaults to ``False``.
+
+    Returns:
+        Tuple[Dict[str, List[dict]], List[datetime]]: The computed or requested result.
     """
     if interval_minutes <= 0:
         raise ValueError("interval_minutes must be > 0")
@@ -135,6 +171,14 @@ def align_data(
 
     # Snap min_time up to the grid, max_time down/up depending on include_end
     def snap_up(t: datetime) -> datetime:
+        """Snap up for multi-currency trading.
+
+        Args:
+            t (datetime): The t value.
+
+        Returns:
+            datetime: The computed or requested result.
+        """
         delta = (t - datetime(t.year, t.month, t.day))
         offset = (delta.total_seconds() // (dt.total_seconds())) * dt
         snapped = datetime(t.year, t.month, t.day) + offset
@@ -143,6 +187,14 @@ def align_data(
         return snapped
 
     def snap_down(t: datetime) -> datetime:
+        """Snap down for multi-currency trading.
+
+        Args:
+            t (datetime): The t value.
+
+        Returns:
+            datetime: The computed or requested result.
+        """
         delta = (t - datetime(t.year, t.month, t.day))
         offset = (delta.total_seconds() // (dt.total_seconds())) * dt
         return datetime(t.year, t.month, t.day) + offset
@@ -214,19 +266,39 @@ def load_and_align_data(
         include_end: bool = False,
         allow_backfill: bool = False
     ):
+    """Load the and align data.
+
+    Args:
+        pairs (Any): The pairs value.
+        base_path (str): The base path value. Defaults to ``'../data/Kraken_OHLCVT/'``.
+        interval (int): The interval value. Defaults to ``1``.
+        include_end (bool): The include end value. Defaults to ``False``.
+        allow_backfill (bool): The allow backfill value. Defaults to ``False``.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     data = load_data(pairs, base_path, interval)
-    
+
     aligned_data, times = align_data(
         data, interval,
         include_end=include_end,
         allow_backfill=allow_backfill
     )
-    
+
     return aligned_data, times
 
 
 def get_field(data: list, field: str) -> float:
-    """Convert a datetime to a float timestamp."""
+    """Convert a datetime to a float timestamp.
+
+    Args:
+        data (list): The data value.
+        field (str): The field value.
+
+    Returns:
+        float: The computed or requested result.
+    """
     result = []
     for name in data:
         result.append([d[field] for d in data[name]])

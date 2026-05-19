@@ -1,3 +1,4 @@
+"""Longshort utilities for trading environment state, action, reward, and simulation logic."""
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
@@ -9,6 +10,7 @@ PI = 3.141592653589793238462
 
 @dataclass
 class State:
+    """State implementation for trading environment state, action, reward, and simulation logic."""
     time: torch.Tensor            # [6]    cyclic time features
     p_rel: torch.Tensor           # [M, N]
     hl_rel: torch.Tensor          # [N]
@@ -21,6 +23,11 @@ class State:
     vol_rel: torch.Tensor         # [M, N]
 
     def to_tensor(self):
+        """Convert the value to tensor.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return torch.cat([
             self.time.flatten(),
             self.p_rel.flatten(),
@@ -36,37 +43,96 @@ class State:
 
 
 class StateHistory:
+    """StateHistory implementation for trading environment state, action, reward, and simulation logic."""
     def __init__(self):
+        """Initialize the instance.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states: list[State] = []
 
     def append(self, state: State):
+        """Append for StateHistory.
+
+        Args:
+            state (State): The state value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states.append(state)
 
     def get_time(self) -> torch.Tensor:
+        """Return the time.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.time for s in self.states])
 
     def get_p_rel(self) -> torch.Tensor:
+        """Return the p rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.p_rel for s in self.states])
 
     def get_hl_rel(self) -> torch.Tensor:
+        """Return the hl rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.hl_rel for s in self.states])
 
     def get_x_rel(self) -> torch.Tensor:
+        """Return the x rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.x_rel for s in self.states])
 
     def get_v_rel(self) -> torch.Tensor:
+        """Return the v rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.v_rel for s in self.states])
 
     def get_unrl_rel(self) -> torch.Tensor:
+        """Return the unrl rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.unrl_rel for s in self.states])
 
     def get_side_rel(self) -> torch.Tensor:
+        """Return the side rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.side_rel for s in self.states])
 
     def get_vol_rel(self) -> torch.Tensor:
+        """Return the vol rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.vol_rel for s in self.states])
 
     def to_tensor(self) -> torch.Tensor:
+        """Convert the value to tensor.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.to_tensor() for s in self.states])
 
 
@@ -121,6 +187,30 @@ class LongShortEnv:
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
     ):
+        """Initialize the instance.
+
+        Args:
+            N (int): The n value.
+            C0 (float): The c0 value.
+            tau_p (torch.Tensor): The tau p value.
+            bankruptcy_threshold (float): The bankruptcy threshold value. Defaults to ``1.0``.
+            transaction_eps (float): The transaction eps value. Defaults to ``0.01``.
+            use_dollar_volume (bool): The use dollar volume value. Defaults to ``True``.
+            save_history (bool): The save history value. Defaults to ``False``.
+            open_fee (float): The open fee value. Defaults to ``1.0``.
+            close_fee (float): The close fee value. Defaults to ``1.0``.
+            tax_rate (float): The tax rate value. Defaults to ``0.26``.
+            min_open_dollars (float): The min open dollars value. Defaults to ``10.0``.
+            val_coeff (float): The val coeff value. Defaults to ``1.0``.
+            roi_coeff (float): The roi coeff value. Defaults to ``1.0``.
+            reward_mode (str): The reward mode value. Defaults to ``'log'``.
+            done_reward_penalty (float): The done reward penalty value. Defaults to ``1.0``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            eps (float): The eps value. Defaults to ``1e-08``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         assert isinstance(N, int) and N > 0
         assert tau_p.ndim == 1 and tau_p.numel() > 0
         assert min_open_dollars >= open_fee, "min_open_dollars must be >= open_fee"
@@ -180,24 +270,61 @@ class LongShortEnv:
     # -------------------------------------------------------------------------
 
     def encode_hold(self) -> int:
+        """Encode hold for LongShortEnv.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 0
 
     def encode_long(self, asset_idx: int) -> int:
+        """Encode long for LongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         if not (0 <= asset_idx < self.N):
             raise ValueError("asset_idx out of range")
         return 1 + asset_idx
 
     def encode_short(self, asset_idx: int) -> int:
+        """Encode short for LongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         if not (0 <= asset_idx < self.N):
             raise ValueError("asset_idx out of range")
         return 1 + self.N + asset_idx
 
     def encode_close(self, asset_idx: int) -> int:
+        """Encode close for LongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         if not (0 <= asset_idx < self.N):
             raise ValueError("asset_idx out of range")
         return 1 + 2 * self.N + asset_idx
 
     def decode_action(self, action_idx: int) -> tuple[str, int | None]:
+        """Decode action for LongShortEnv.
+
+        Args:
+            action_idx (int): The action idx value.
+
+        Returns:
+            tuple[str, int | None]: The computed or requested result.
+        """
         if action_idx == 0:
             return ("hold", None)
         if 1 <= action_idx <= self.N:
@@ -209,11 +336,13 @@ class LongShortEnv:
         raise ValueError(f"invalid action index {action_idx}")
 
     def valid_action_mask(self) -> torch.Tensor:
-        """
-        Boolean mask of shape [action_dim]. An open is valid if the agent
+        """Boolean mask of shape [action_dim]. An open is valid if the agent
         is not already positioned the same way on the target asset, AND
         (after any implicit close of the opposite position) enough cash
         remains to satisfy the fixed open fee + minimum open dollars.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         mask = torch.zeros(self.action_dim, dtype=torch.bool)
         mask[0] = True  # hold
@@ -275,6 +404,11 @@ class LongShortEnv:
     # -------------------------------------------------------------------------
 
     def _compute_time_vector(self) -> torch.Tensor:
+        """Compute the time vector.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         time = datetime.fromtimestamp(self.t)
         dateiso = time.isocalendar()
 
@@ -288,20 +422,33 @@ class LongShortEnv:
         return torch.cat([torch.sin(2 * PI * angles), torch.cos(2 * PI * angles)])
 
     def _compute_value_weights(self) -> torch.Tensor:
-        """Signed value weights: cash / V and pos_units * p / V."""
+        """Signed value weights: cash / V and pos_units * p / V.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         V = self.V.clamp(min=self.eps)
         x_cash = (self.C / V)[None]
         x_assets = (self.pos_units * self.p) / V
         return torch.cat([x_cash, x_assets])
 
     def _compute_cost_weights(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute the cost weights.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         S = self.committed.sum()
         c_rel = (self.committed / (S + self.eps)) if S.item() > 0 else torch.zeros(self.N, dtype=self.dtype)
         rho = S / (S + self.C + self.eps)
         return c_rel, rho
 
     def _compute_unrl_rel(self) -> torch.Tensor:
-        """Signed unrealized after-tax PnL divided by committed collateral."""
+        """Signed unrealized after-tax PnL divided by committed collateral.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         has = self.committed > self.eps
         unrl_rel = torch.zeros(self.N, dtype=self.dtype)
         if has.any():
@@ -312,15 +459,37 @@ class LongShortEnv:
         return unrl_rel
 
     def _compute_side_rel(self) -> torch.Tensor:
+        """Compute the side rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         side = torch.zeros(self.N, dtype=self.dtype)
         side[self.pos_units > self.eps] = 1.0
         side[self.pos_units < -self.eps] = -1.0
         return side
 
     def _compute_hl_rel(self, high: torch.Tensor, low: torch.Tensor) -> torch.Tensor:
+        """Compute the hl rel.
+
+        Args:
+            high (torch.Tensor): The high value.
+            low (torch.Tensor): The low value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return 2.0 * (high - low) / (high + low + self.eps)
 
     def _get_market_inputs(self, data: dict) -> tuple[float, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return the market inputs.
+
+        Args:
+            data (dict): The data value.
+
+        Returns:
+            tuple[float, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         for key in ("close", "high", "low", "volume", "time"):
             if key not in data:
                 raise KeyError(f"data must contain '{key}'")
@@ -337,6 +506,11 @@ class LongShortEnv:
         return float(data["time"]), close, high, low, volume
 
     def _get_state(self) -> State:
+        """Return the current state snapshot.
+
+        Returns:
+            State: The computed or requested result.
+        """
         t_vec = self._compute_time_vector().to(self.dtype)
         x_rel = self._compute_value_weights().to(self.dtype)
         c_rel, rho = self._compute_cost_weights()
@@ -362,7 +536,11 @@ class LongShortEnv:
 
     @property
     def V(self) -> torch.Tensor:
-        """Equity = cash + sum(committed + signed PnL)."""
+        """Equity = cash + sum(committed + signed PnL).
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         pnl = self.pos_units * (self.p - self.entry_price)
         return self.C + self.committed.sum() + pnl.sum()
 
@@ -371,6 +549,15 @@ class LongShortEnv:
     # -------------------------------------------------------------------------
 
     def reset(self, data: dict, C0: Optional[float] = None) -> State:
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            data (dict): The data value.
+            C0 (Optional[float]): The c0 value. Defaults to ``None``.
+
+        Returns:
+            State: The computed or requested result.
+        """
         if C0 is not None:
             self.C0 = float(C0)
 
@@ -410,6 +597,14 @@ class LongShortEnv:
         return state
 
     def _update(self, data: dict) -> None:
+        """Apply one update step.
+
+        Args:
+            data (dict): The data value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.V_prev = self.V.detach().clone()
 
         t_new, close, high, low, volume = self._get_market_inputs(data)
@@ -439,7 +634,14 @@ class LongShortEnv:
     # -------------------------------------------------------------------------
 
     def _close_position(self, k: int) -> bool:
-        """Close position on asset k. Returns True if a close was executed."""
+        """Close position on asset k. Returns True if a close was executed.
+
+        Args:
+            k (int): The k value.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         units = self.pos_units[k]
         if abs(float(units.item())) <= self.eps:
             return False
@@ -470,7 +672,15 @@ class LongShortEnv:
         return True
 
     def _open_position(self, k: int, side: int) -> bool:
-        """Open a side=+1 long or side=-1 short on asset k using all available cash."""
+        """Open a side=+1 long or side=-1 short on asset k using all available cash.
+
+        Args:
+            k (int): The k value.
+            side (int): The side value.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         cash = float(self.C.item())
         buy_dollars = cash - self.o_fee
         if not (cash > self.o_fee and buy_dollars >= self.min_open_dollars):
@@ -490,6 +700,14 @@ class LongShortEnv:
         return True
 
     def _trade(self, a: int | torch.Tensor | None) -> tuple[torch.Tensor, bool]:
+        """Trade for LongShortEnv.
+
+        Args:
+            a (int | torch.Tensor | None): The a value.
+
+        Returns:
+            tuple[torch.Tensor, bool]: The computed or requested result.
+        """
         self.realized_cost.zero_()
         self.realized_pnl.zero_()
 
@@ -548,6 +766,11 @@ class LongShortEnv:
     # -------------------------------------------------------------------------
 
     def _reward(self) -> float:
+        """Reward for LongShortEnv.
+
+        Returns:
+            float: The computed or requested result.
+        """
         if self.realized_cost.sum() > self.eps:
             reward = self.roi_coeff * (self.realized_pnl.sum() / self.realized_cost.sum()).item()
         else:
@@ -565,6 +788,15 @@ class LongShortEnv:
     # -------------------------------------------------------------------------
 
     def step(self, a: int | torch.Tensor | None, data: dict) -> Tuple[State, float, bool, Dict]:
+        """Advance the simulation by one step.
+
+        Args:
+            a (int | torch.Tensor | None): The a value.
+            data (dict): The data value.
+
+        Returns:
+            Tuple[State, float, bool, Dict]: The computed or requested result.
+        """
         action_info, valid_trade = self._trade(a)
         self._update(data)
         reward = self._reward()
@@ -627,6 +859,30 @@ class BatchedLongShortEnv:
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
     ):
+        """Initialize the instance.
+
+        Args:
+            B (int): The b value.
+            N (int): The n value.
+            C0 (float): The c0 value.
+            tau_p (torch.Tensor): The tau p value.
+            bankruptcy_threshold (float): The bankruptcy threshold value. Defaults to ``1.0``.
+            transaction_eps (float): The transaction eps value. Defaults to ``0.01``.
+            use_dollar_volume (bool): The use dollar volume value. Defaults to ``True``.
+            open_fee (float): The open fee value. Defaults to ``1.0``.
+            close_fee (float): The close fee value. Defaults to ``1.0``.
+            tax_rate (float): The tax rate value. Defaults to ``0.26``.
+            min_open_dollars (float): The min open dollars value. Defaults to ``10.0``.
+            val_coeff (float): The val coeff value. Defaults to ``1.0``.
+            roi_coeff (float): The roi coeff value. Defaults to ``1.0``.
+            reward_mode (str): The reward mode value. Defaults to ``'log'``.
+            done_reward_penalty (float): The done reward penalty value. Defaults to ``1.0``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            eps (float): The eps value. Defaults to ``1e-08``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         assert isinstance(B, int) and B > 0
         assert isinstance(N, int) and N > 0
         assert tau_p.ndim == 1 and tau_p.numel() > 0
@@ -682,15 +938,44 @@ class BatchedLongShortEnv:
     # -------------------------------------------------------------------------
 
     def encode_hold(self) -> int:
+        """Encode hold for BatchedLongShortEnv.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 0
 
     def encode_long(self, asset_idx: int) -> int:
+        """Encode long for BatchedLongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 1 + asset_idx
 
     def encode_short(self, asset_idx: int) -> int:
+        """Encode short for BatchedLongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 1 + self.N + asset_idx
 
     def encode_close(self, asset_idx: int) -> int:
+        """Encode close for BatchedLongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 1 + 2 * self.N + asset_idx
 
     # -------------------------------------------------------------------------
@@ -699,6 +984,11 @@ class BatchedLongShortEnv:
 
     @property
     def V(self) -> torch.Tensor:   # (B,)
+        """V for BatchedLongShortEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         pnl = self.pos_units * (self.p - self.entry_price)   # (B, N)
         return self.C + self.committed.sum(dim=-1) + pnl.sum(dim=-1)
 
@@ -715,6 +1005,19 @@ class BatchedLongShortEnv:
         time: torch.Tensor,
         C0: Optional[float] = None,
     ) -> torch.Tensor:
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            close (torch.Tensor): The close value.
+            high (torch.Tensor): The high value.
+            low (torch.Tensor): The low value.
+            volume (torch.Tensor): The volume value.
+            time (torch.Tensor): The time value.
+            C0 (Optional[float]): The c0 value. Defaults to ``None``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if C0 is not None:
             self.C0 = float(C0)
 
@@ -755,9 +1058,23 @@ class BatchedLongShortEnv:
     # -------------------------------------------------------------------------
 
     def _hl_rel(self, high: torch.Tensor, low: torch.Tensor) -> torch.Tensor:
+        """Hl rel for BatchedLongShortEnv.
+
+        Args:
+            high (torch.Tensor): The high value.
+            low (torch.Tensor): The low value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return 2.0 * (high - low) / (high + low + self.eps)
 
     def _time_features(self) -> torch.Tensor:
+        """Time features for BatchedLongShortEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         features = []
         for ts in self.t.tolist():
             dt_obj = datetime.fromtimestamp(ts)
@@ -771,6 +1088,11 @@ class BatchedLongShortEnv:
         return torch.stack(features)
 
     def _obs(self) -> torch.Tensor:
+        """Obs for BatchedLongShortEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B, N = self.B, self.N
         V = self.V.clamp(min=self.eps)
 
@@ -822,6 +1144,18 @@ class BatchedLongShortEnv:
         volume: torch.Tensor,
         time: torch.Tensor,
     ) -> None:
+        """Apply one update step.
+
+        Args:
+            close (torch.Tensor): The close value.
+            high (torch.Tensor): The high value.
+            low (torch.Tensor): The low value.
+            volume (torch.Tensor): The volume value.
+            time (torch.Tensor): The time value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.V_prev = self.V.detach().clone()
 
         close  = close.to(self.dtype)
@@ -855,8 +1189,13 @@ class BatchedLongShortEnv:
         self.v_rel    = (v_exp - self.v_smooth) / self.v_smooth.clamp(min=self.eps)
 
     def _trade(self, actions: torch.Tensor) -> None:
-        """
-        Two-phase vectorized execution: close (incl. flip-triggered) then open.
+        """Two-phase vectorized execution: close (incl. flip-triggered) then open.
+
+        Args:
+            actions (torch.Tensor): The actions value.
+
+        Returns:
+            None: This function does not return a value.
         """
         B, N = self.B, self.N
         b = self._b_idx
@@ -962,6 +1301,11 @@ class BatchedLongShortEnv:
         self.C           = self.C.clamp(min=0.0)
 
     def _reward(self) -> torch.Tensor:
+        """Reward for BatchedLongShortEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         has_realized = self.realized_cost.sum(dim=1) > self.eps
         roi = self.realized_pnl.sum(dim=1) / self.realized_cost.sum(dim=1).clamp(min=self.eps)
         V      = self.V
@@ -985,7 +1329,19 @@ class BatchedLongShortEnv:
         volume: torch.Tensor,
         time: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Returns obs (B, state_dim), rewards (B,), dones (B,)."""
+        """Returns obs (B, state_dim), rewards (B,), dones (B,).
+
+        Args:
+            actions (torch.Tensor): The actions value.
+            close (torch.Tensor): The close value.
+            high (torch.Tensor): The high value.
+            low (torch.Tensor): The low value.
+            volume (torch.Tensor): The volume value.
+            time (torch.Tensor): The time value.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         actions = torch.as_tensor(actions, dtype=torch.long).to(self.C.device).reshape(-1)
         if actions.numel() != self.B:
             raise ValueError(f"actions must have {self.B} elements, got {actions.numel()}")
@@ -1000,7 +1356,11 @@ class BatchedLongShortEnv:
         return self._obs(), rewards, dones
 
     def valid_action_mask(self) -> torch.Tensor:
-        """Returns (B, action_dim) bool tensor."""
+        """Returns (B, action_dim) bool tensor.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B, N = self.B, self.N
         eps = self.eps
 

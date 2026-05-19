@@ -1,3 +1,4 @@
+"""Builder utilities for neural network architectures and reusable model components."""
 import torch
 
 from src.network.action_q import ActionQNetwork
@@ -26,8 +27,7 @@ NETWORK_REGISTRY: dict[str, type[torch.nn.Module]] = {
 
 
 def build_network(network: dict) -> torch.nn.Module:
-    """
-    Build a network from a config dict.
+    """Build a network from a config dict.
 
     The dict must contain a ``type`` key whose value matches the ``name``
     attribute of a registered network class. All other keys are forwarded as
@@ -41,6 +41,12 @@ def build_network(network: dict) -> torch.nn.Module:
     ...     "action_dim": 37,
     ...     "hidden_dims": [128, 128],
     ... })
+
+    Args:
+        network (dict): The network value.
+
+    Returns:
+        torch.nn.Module: The computed or requested result.
     """
     cfg = dict(network)
     if "type" not in cfg:

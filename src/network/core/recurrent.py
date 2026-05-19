@@ -1,3 +1,4 @@
+"""Recurrent utilities for neural network architectures and reusable model components."""
 import math
 import torch
 
@@ -9,13 +10,19 @@ def _normalize_sequence_input(
     *,
     expected_in: int,
 ) -> tuple[torch.Tensor, bool]:
-    """
-    Normalize sequence input to (T, B, input_dim).
+    """Normalize sequence input to (T, B, input_dim).
 
     Accepts either an unbatched sequence (T, input_dim) or an explicitly
     batched sequence (T, B, input_dim). Returns the normalized tensor plus a
     flag indicating whether the caller should squeeze the singleton batch axis
     back out of the output.
+
+    Args:
+        x_seq (torch.Tensor): The x seq value.
+        expected_in (int): The expected in value.
+
+    Returns:
+        tuple[torch.Tensor, bool]: The computed or requested result.
     """
     if x_seq.dim() == 2:
         if x_seq.shape[-1] != expected_in:
@@ -41,6 +48,18 @@ def _copy_trace_tensor(
     clone: bool = True,
     detach: bool = True,
 ) -> torch.Tensor:
+    """Copy trace tensor for neural network architectures and reusable model components.
+
+    Args:
+        value (torch.Tensor | None): The value value.
+        device (torch.device): The device value.
+        dtype (torch.dtype): The dtype value.
+        clone (bool): The clone value. Defaults to ``True``.
+        detach (bool): The detach value. Defaults to ``True``.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
+    """
     if value is None:
         return torch.empty(0, device=device, dtype=dtype)
     out = value
@@ -59,6 +78,18 @@ def _restore_trace_tensor(
     clone: bool = True,
     detach: bool = True,
 ) -> torch.Tensor | None:
+    """Restore trace tensor for neural network architectures and reusable model components.
+
+    Args:
+        value (torch.Tensor | None): The value value.
+        device (torch.device): The device value.
+        dtype (torch.dtype): The dtype value.
+        clone (bool): The clone value. Defaults to ``True``.
+        detach (bool): The detach value. Defaults to ``True``.
+
+    Returns:
+        torch.Tensor | None: The computed or requested result.
+    """
     if value is None or value.numel() == 0:
         return None
     out = value
@@ -70,6 +101,14 @@ def _restore_trace_tensor(
 
 
 def _collect_plastic_modules(modules) -> list[torch.nn.Module]:
+    """Collect plastic modules for neural network architectures and reusable model components.
+
+    Args:
+        modules (Any): The modules value.
+
+    Returns:
+        list[torch.nn.Module]: The computed or requested result.
+    """
     return [module for module in modules if hasattr(module, "plastic_parameters") and hasattr(module, "apply_online_gradients")]
 
 
@@ -79,6 +118,16 @@ def _apply_online_updates(
     *,
     retain_graph: bool = False,
 ) -> bool:
+    """Apply online updates for neural network architectures and reusable model components.
+
+    Args:
+        modules (Any): The modules value.
+        loss (torch.Tensor): The loss value.
+        retain_graph (bool): The retain graph value. Defaults to ``False``.
+
+    Returns:
+        bool: The computed or requested result.
+    """
     plastic_modules = _collect_plastic_modules(modules)
     if not plastic_modules:
         return False
@@ -108,9 +157,30 @@ def _apply_online_updates(
 
 
 class RecurrentCell(torch.nn.Module):
+    """
+    Single-layer Elman recurrent cell.
+
+    For input $x_t \\in \\mathbb{R}^{d_{in}}$ and hidden state
+    $h_{t-1} \\in \\mathbb{R}^{d_{out}}$, the cell computes
+    \\[
+        h_t = \\phi(W_{ih}x_t + W_{hh}h_{t-1} + b).
+    \\]
+    The activation $\\phi$ is either $\\tanh$ or ReLU, matching the underlying
+    ``torch.nn.RNN`` nonlinearity. The stored recurrent state is $h_t$.
+    """
     _ACT_TO_NONLINEARITY = {torch.tanh: "tanh", torch.relu: "relu"}
 
     def __init__(self, n_in, n_out, act=torch.tanh):
+        """Initialize the instance.
+
+        Args:
+            n_in (Any): The n in value.
+            n_out (Any): The n out value.
+            act (Any): The act value. Defaults to ``torch.tanh``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         self.n_in = n_in
         self.n_out = n_out
@@ -130,12 +200,29 @@ class RecurrentCell(torch.nn.Module):
         torch.nn.init.zeros_(self.rnn.bias_hh_l0)
 
     def reset(self, batch_size: int = 1, device: torch.device = None, dtype: torch.dtype = None):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+            device (torch.device): The device value. Defaults to ``None``.
+            dtype (torch.dtype): The dtype value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = device if device is not None else self.rnn.weight_hh_l0.device
         dtype = dtype if dtype is not None else self.rnn.weight_hh_l0.dtype
         self.state = torch.zeros(batch_size, self.n_out, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Single-step forward.  x: (B, n_in)  →  (B, n_out)"""
+        """Single-step forward.  x: (B, n_in)  →  (B, n_out)
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B = x.shape[0]
         if self.state is None or self.state.shape[0] != B:
             self.reset(B, device=x.device, dtype=x.dtype)
@@ -144,10 +231,15 @@ class RecurrentCell(torch.nn.Module):
         return self.state
 
     def forward_seq(self, x_seq: torch.Tensor) -> torch.Tensor:
-        """
-        Full-sequence forward using the fused RNN kernel.
+        """Full-sequence forward using the fused RNN kernel.
 
         x_seq: (T, n_in)  →  (T, n_out)
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         x_seq_3d, squeeze_batch = _normalize_sequence_input(x_seq, expected_in=self.n_in)
         B = x_seq_3d.shape[1]
@@ -158,6 +250,15 @@ class RecurrentCell(torch.nn.Module):
         return out.squeeze(1) if squeeze_batch else out
 
     def get_state(self, clone: bool = True, detach: bool = True) -> torch.Tensor:
+        """Return the current state snapshot.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if self.state is None:
             return torch.empty(0, device=self.rnn.weight_hh_l0.device, dtype=self.rnn.weight_hh_l0.dtype)
         s = self.state
@@ -168,6 +269,16 @@ class RecurrentCell(torch.nn.Module):
         return s
 
     def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True):
+        """Restore the current state snapshot.
+
+        Args:
+            state (torch.Tensor): The state value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if state.numel() == 0:
             self.state = None
             return
@@ -183,12 +294,22 @@ class GradientOjaRecurrentCell(torch.nn.Module):
     """
     Recurrent cell with local Oja plasticity plus an EMA of task gradients.
 
-    The integrated error state follows:
-      E <- E + nu * (E_t - E)
+    The recurrent dynamics use a hidden state
+    $h_t = \\phi(W_x x_t + W_h h_{t-1} + b)$. In addition to standard
+    parameters, the cell keeps low-pass traces of task error and gradients:
+    \\[
+        E_t \\leftarrow E_{t-1} + \\nu(e_t - E_{t-1}).
+    \\]
+    Oja-style local plasticity updates the recurrent weights with a
+    stabilizing decay term of the form
+    \\[
+        \\Delta W \\propto \\eta\\, h_t h_{t-1}^{\\top}
+        - \\lambda\\, h_t^2 W.
+    \\]
 
-    and the same EMA is applied to per-parameter gradients so the weight update
-    can use a low-pass filtered task signal without backpropagating through the
-    full online history.
+    The same exponential moving average idea is applied to per-parameter
+    gradients so the update can use a filtered task signal without
+    backpropagating through the full online history.
     """
 
     def __init__(
@@ -202,6 +323,21 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         nu: float = 0.1,
         wclip: float | None = None,
     ):
+        """Initialize the instance.
+
+        Args:
+            n_in (Any): The n in value.
+            n_out (Any): The n out value.
+            act (Any): The act value. Defaults to ``torch.tanh``.
+            eta (float): The eta value. Defaults to ``0.001``.
+            lambda_ (float): The lambda value. Defaults to ``0.0001``.
+            alpha (float): The alpha value. Defaults to ``1.0``.
+            nu (float): The nu value. Defaults to ``0.1``.
+            wclip (float | None): The wclip value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         if nu <= 0:
             raise ValueError("nu must be positive.")
@@ -235,6 +371,16 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         torch.nn.init.orthogonal_(self.w_ext.weight)
 
     def reset(self, batch_size: int = 1, device: torch.device = None, dtype: torch.dtype = None):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+            device (torch.device): The device value. Defaults to ``None``.
+            dtype (torch.dtype): The dtype value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = device if device is not None else self.b.device
         dtype = dtype if dtype is not None else self.b.dtype
         self.state = torch.zeros(batch_size, self.n_out, device=device, dtype=dtype)
@@ -243,6 +389,14 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         self._last_output = None
 
     def forward(self, x):
+        """Compute the forward pass.
+
+        Args:
+            x (Any): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if self.state is None or self.state.shape[0] != x.shape[0]:
             self.reset(batch_size=x.shape[0], device=x.device, dtype=x.dtype)
 
@@ -257,9 +411,14 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         return self.state
 
     def forward_seq(self, x_seq: torch.Tensor) -> torch.Tensor:
-        """
-        x_seq: (T, n_in)  →  (T, n_out)
+        """x_seq: (T, n_in)  →  (T, n_out)
         Loops over time internally; state and online traces are updated in-place.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         x_seq_3d, squeeze_batch = _normalize_sequence_input(x_seq, expected_in=self.n_in)
         steps = [self(x_seq_3d[t]) for t in range(x_seq_3d.shape[0])]
@@ -267,6 +426,15 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         return out.squeeze(1) if squeeze_batch else out
 
     def get_state(self, clone: bool = True, detach: bool = True) -> torch.Tensor:
+        """Return the current state snapshot.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if self.state is None:
             return torch.empty(0, device=self.b.device, dtype=self.b.dtype)
         s = self.state
@@ -277,6 +445,16 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         return s
 
     def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True):
+        """Restore the current state snapshot.
+
+        Args:
+            state (torch.Tensor): The state value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if state.numel() == 0:
             self.state = None
             return
@@ -288,6 +466,15 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         self.state = s.to(device=self.b.device, dtype=self.b.dtype)
 
     def get_online_trace(self, clone: bool = True, detach: bool = True) -> dict[str, torch.Tensor]:
+        """Return the online trace.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict[str, torch.Tensor]: The computed or requested result.
+        """
         return {
             "x": _copy_trace_tensor(self._last_input, device=self.b.device, dtype=self.b.dtype, clone=clone, detach=detach),
             "rec": _copy_trace_tensor(self._last_prev_state, device=self.b.device, dtype=self.b.dtype, clone=clone, detach=detach),
@@ -295,15 +482,39 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         }
 
     def set_online_trace(self, trace: dict[str, torch.Tensor] | None, clone: bool = True, detach: bool = True):
+        """Set the online trace.
+
+        Args:
+            trace (dict[str, torch.Tensor] | None): The trace value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         trace = trace or {}
         self._last_input = _restore_trace_tensor(trace.get("x"), device=self.b.device, dtype=self.b.dtype, clone=clone, detach=detach)
         self._last_prev_state = _restore_trace_tensor(trace.get("rec"), device=self.b.device, dtype=self.b.dtype, clone=clone, detach=detach)
         self._last_output = _restore_trace_tensor(trace.get("y"), device=self.b.device, dtype=self.b.dtype, clone=clone, detach=detach)
 
     def plastic_parameters(self) -> tuple[torch.nn.Parameter, ...]:
+        """Plastic parameters for GradientOjaRecurrentCell.
+
+        Returns:
+            tuple[torch.nn.Parameter, ...]: The computed or requested result.
+        """
         return (self.w_ext.weight, self.w_rec.weight, self.b)
 
     def _update_grad_ema(self, ema: torch.Tensor, grad: torch.Tensor | None):
+        """Update grad ema for GradientOjaRecurrentCell.
+
+        Args:
+            ema (torch.Tensor): The ema value.
+            grad (torch.Tensor | None): The grad value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if grad is None:
             ema.mul_(1.0 - self.nu)
             return
@@ -317,6 +528,17 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         weight: torch.Tensor,
         alpha: float,
     ) -> torch.Tensor:
+        """Oja term for GradientOjaRecurrentCell.
+
+        Args:
+            y (torch.Tensor | None): The y value.
+            x (torch.Tensor | None): The x value.
+            weight (torch.Tensor): The weight value.
+            alpha (float): The alpha value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if y is None or x is None or y.numel() == 0 or x.numel() == 0:
             return torch.zeros_like(weight)
         proj = x @ weight.T
@@ -324,6 +546,15 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         return term.mean(dim=0)
 
     def apply_online_gradients(self, gradients, *, error_t: torch.Tensor):
+        """Apply online gradients for GradientOjaRecurrentCell.
+
+        Args:
+            gradients (Any): The gradients value.
+            error_t (torch.Tensor): The error t value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         grad_ext, grad_rec, grad_bias = gradients
 
         with torch.no_grad():
@@ -359,7 +590,33 @@ class GradientOjaRecurrentCell(torch.nn.Module):
 # forward_seq() is the new high-speed path used by RecurrentNetwork.forward_seq.
 # ---------------------------------------------------------------------------
 class GRURecurrentCell(torch.nn.Module):
+    """
+    Gated recurrent unit backed by ``torch.nn.GRU``.
+
+    The GRU maintains gates
+    \\[
+        z_t = \\sigma(W_z x_t + U_z h_{t-1}), \\qquad
+        r_t = \\sigma(W_r x_t + U_r h_{t-1}),
+    \\]
+    and updates its hidden state with
+    \\[
+        \\tilde{h}_t = \\tanh(W_h x_t + U_h(r_t \\odot h_{t-1})), \\qquad
+        h_t = (1-z_t)\\odot \\tilde{h}_t + z_t\\odot h_{t-1}.
+    \\]
+    Sequence inputs are delegated to the fused PyTorch GRU kernel, which keeps
+    the temporal recurrence mathematically identical while avoiding a Python
+    loop.
+    """
     def __init__(self, n_in, n_out):
+        """Initialize the instance.
+
+        Args:
+            n_in (Any): The n in value.
+            n_out (Any): The n out value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         self.n_in = n_in
         self.n_out = n_out
@@ -373,12 +630,29 @@ class GRURecurrentCell(torch.nn.Module):
         torch.nn.init.zeros_(self.gru.bias_hh_l0)
 
     def reset(self, batch_size: int = 1, device: torch.device = None, dtype: torch.dtype = None):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+            device (torch.device): The device value. Defaults to ``None``.
+            dtype (torch.dtype): The dtype value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = device if device is not None else self.gru.weight_hh_l0.device
         dtype = dtype if dtype is not None else self.gru.weight_hh_l0.dtype
         self.state = torch.zeros(batch_size, self.n_out, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Single-step forward.  x: (B, n_in)  →  (B, n_out)"""
+        """Single-step forward.  x: (B, n_in)  →  (B, n_out)
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B = x.shape[0]
         if self.state is None or self.state.shape[0] != B:
             self.reset(B, device=x.device, dtype=x.dtype)
@@ -388,14 +662,19 @@ class GRURecurrentCell(torch.nn.Module):
         return self.state
 
     def forward_seq(self, x_seq: torch.Tensor) -> torch.Tensor:
-        """
-        Full-sequence forward using the CuDNN fused kernel.
+        """Full-sequence forward using the CuDNN fused kernel.
 
         x_seq: (T, n_in)  →  (T, n_out)   [implicit B=1]
 
         The entire temporal loop runs inside a single CUDA kernel — no Python
         overhead per timestep.  self.state is updated to h_T so subsequent
         single-step forward() calls continue from the correct hidden state.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         # Add and later remove the batch dimension expected by nn.GRU
         x_seq_3d, squeeze_batch = _normalize_sequence_input(x_seq, expected_in=self.n_in)
@@ -408,6 +687,15 @@ class GRURecurrentCell(torch.nn.Module):
         return out.squeeze(1) if squeeze_batch else out
 
     def get_state(self, clone: bool = True, detach: bool = True) -> torch.Tensor:
+        """Return the current state snapshot.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if self.state is None:
             return torch.empty(0, device=self.gru.weight_hh_l0.device, dtype=self.gru.weight_hh_l0.dtype)
         s = self.state
@@ -418,6 +706,16 @@ class GRURecurrentCell(torch.nn.Module):
         return s
 
     def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True):
+        """Restore the current state snapshot.
+
+        Args:
+            state (torch.Tensor): The state value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if state.numel() == 0:
             self.state = None
             return
@@ -433,14 +731,24 @@ class LMUCell(torch.nn.Module):
     """
     Legendre Memory Unit cell with explicit internal state.
 
-    State:
-      - memory state m_t : shape (batch, memory_size)
-      - hidden state h_t : shape (batch, hidden_size)
+    The memory state $m_t \\in \\mathbb{R}^{d_m}$ approximates a sliding-window
+    projection of the recent input history onto Legendre basis functions. After
+    discretization, the memory update is
+    \\[
+        m_t = A_d m_{t-1} + B_d u_t,
+    \\]
+    where
+    \\[
+        u_t = W_u x_t + W_{hu} h_{t-1}.
+    \\]
+    The nonlinear hidden state then follows
+    \\[
+        h_t = \\phi(W_x x_t + W_m m_t + W_h h_{t-1} + b).
+    \\]
 
-    Update:
-      u_t = W_u x_t + W_hu h_{t-1}
-      m_t = A_d m_{t-1} + B_d u_t
-      h_t = act(W_x x_t + W_m m_t + W_h h_{t-1} + b)
+    State:
+      - memory state $m_t$: shape ``(batch, memory_size)``
+      - hidden state $h_t$: shape ``(batch, hidden_size)``
 
     Notes
     -----
@@ -458,6 +766,19 @@ class LMUCell(torch.nn.Module):
         act=torch.tanh,
         learn_a_b: bool = False,
     ):
+        """Initialize the instance.
+
+        Args:
+            n_in (int): The n in value.
+            n_out (int): The n out value.
+            memory_size (int): The memory size value.
+            theta (float): The theta value.
+            act (Any): The act value. Defaults to ``torch.tanh``.
+            learn_a_b (bool): The learn a b value. Defaults to ``False``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         if memory_size <= 0:
             raise ValueError("memory_size must be positive.")
@@ -505,6 +826,15 @@ class LMUCell(torch.nn.Module):
 
     @staticmethod
     def _make_continuous_lmu_matrices(memory_size: int, theta: float):
+        """Create the continuous lmu matrices.
+
+        Args:
+            memory_size (int): The memory size value.
+            theta (float): The theta value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         q = memory_size
         A = torch.zeros(q, q, dtype=torch.float32)
         B = torch.zeros(q, 1, dtype=torch.float32)
@@ -519,6 +849,16 @@ class LMUCell(torch.nn.Module):
 
     @staticmethod
     def _discretize_zoh(A: torch.Tensor, B: torch.Tensor, dt: float = 1.0):
+        """Discretize zoh for LMUCell.
+
+        Args:
+            A (torch.Tensor): The a value.
+            B (torch.Tensor): The b value.
+            dt (float): The dt value. Defaults to ``1.0``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         q = A.shape[0]
         device = A.device
         dtype = A.dtype
@@ -529,12 +869,30 @@ class LMUCell(torch.nn.Module):
         return Md[:q, :q], Md[:q, q:]
 
     def reset(self, batch_size: int = 1, device: torch.device = None, dtype: torch.dtype = None):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+            device (torch.device): The device value. Defaults to ``None``.
+            dtype (torch.dtype): The dtype value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = device if device is not None else self.b.device
         dtype = dtype if dtype is not None else self.b.dtype
         self.memory_state = torch.zeros(batch_size, self.memory_size, device=device, dtype=dtype)
         self.hidden_state = torch.zeros(batch_size, self.n_out, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute the forward pass.
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if self.hidden_state is None or self.memory_state is None or self.hidden_state.shape[0] != x.shape[0]:
             self.reset(batch_size=x.shape[0], device=x.device, dtype=x.dtype)
         u = self.w_u(x) + self.w_hu(self.hidden_state)
@@ -546,9 +904,14 @@ class LMUCell(torch.nn.Module):
         return h
 
     def forward_seq(self, x_seq: torch.Tensor) -> torch.Tensor:
-        """
-        x_seq: (T, n_in)  →  (T, n_out)
+        """x_seq: (T, n_in)  →  (T, n_out)
         Loops over time internally; both memory and hidden states are updated.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         x_seq_3d, squeeze_batch = _normalize_sequence_input(x_seq, expected_in=self.n_in)
         steps = [self(x_seq_3d[t]) for t in range(x_seq_3d.shape[0])]
@@ -556,6 +919,15 @@ class LMUCell(torch.nn.Module):
         return out.squeeze(1) if squeeze_batch else out
 
     def get_state(self, clone: bool = True, detach: bool = True) -> dict[str, torch.Tensor]:
+        """Return the current state snapshot.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict[str, torch.Tensor]: The computed or requested result.
+        """
         if self.memory_state is None or self.hidden_state is None:
             empty = torch.empty(0, device=self.b.device, dtype=self.b.dtype)
             return {"memory": empty, "hidden": empty}
@@ -567,6 +939,16 @@ class LMUCell(torch.nn.Module):
         return {"memory": m, "hidden": h}
 
     def set_state(self, state: dict[str, torch.Tensor], clone: bool = True, detach: bool = True):
+        """Restore the current state snapshot.
+
+        Args:
+            state (dict[str, torch.Tensor]): The state value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if not isinstance(state, dict):
             raise TypeError("state must be a dict with keys 'memory' and 'hidden'.")
         m = state.get("memory", None)
@@ -587,11 +969,17 @@ class ParallelRecurrentCell(torch.nn.Module):
     """
     RNN cell with a parallel linear (feedthrough) branch, merged by addition.
 
-    At each timestep the two branches are computed independently and summed:
-
-        h_t  = rec_act(W_ih x_t + W_hh h_{t-1} + b)   [via nn.RNN, size rec_dim]
-        lin  = lin_act(W_lin x_t + b_lin)               [size n_out]
-        y_t  = W_rec_proj(h_t) + lin                    [size n_out]
+    At each timestep the recurrent and feedforward branches are computed
+    independently:
+    \\[
+        h_t = \\phi_r(W_{ih}x_t + W_{hh}h_{t-1} + b_r),
+        \\qquad
+        \\ell_t = \\phi_\\ell(W_\\ell x_t + b_\\ell).
+    \\]
+    The output is the sum
+    \\[
+        y_t = W_p h_t + \\ell_t.
+    \\]
 
     W_rec_proj projects the recurrent hidden state to n_out before summing.
     The hidden state carries only h_t (shape rec_dim).
@@ -612,6 +1000,18 @@ class ParallelRecurrentCell(torch.nn.Module):
         rec_act=torch.tanh,
         lin_act=torch.relu,
     ):
+        """Initialize the instance.
+
+        Args:
+            n_in (Any): The n in value.
+            n_out (Any): The n out value.
+            rec_dim (Any): The rec dim value. Defaults to ``None``.
+            rec_act (Any): The rec act value. Defaults to ``torch.tanh``.
+            lin_act (Any): The lin act value. Defaults to ``torch.relu``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         rec_dim = rec_dim if rec_dim is not None else n_out
         self.n_in = n_in
@@ -640,12 +1040,29 @@ class ParallelRecurrentCell(torch.nn.Module):
         torch.nn.init.zeros_(self.w_lin.bias)
 
     def reset(self, batch_size: int = 1, device=None, dtype=None):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+            device (Any): The device value. Defaults to ``None``.
+            dtype (Any): The dtype value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = device if device is not None else self.rnn.weight_hh_l0.device
         dtype = dtype if dtype is not None else self.rnn.weight_hh_l0.dtype
         self.state = torch.zeros(batch_size, self.rec_dim, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Single-step forward.  x: (B, n_in)  →  (B, n_out)"""
+        """Single-step forward.  x: (B, n_in)  →  (B, n_out)
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B = x.shape[0]
         if self.state is None or self.state.shape[0] != B:
             self.reset(B, device=x.device, dtype=x.dtype)
@@ -654,7 +1071,14 @@ class ParallelRecurrentCell(torch.nn.Module):
         return self.w_rec_proj(self.state) + self.lin_act(self.w_lin(x))
 
     def forward_seq(self, x_seq: torch.Tensor) -> torch.Tensor:
-        """Full-sequence forward.  x_seq: (T, n_in)  →  (T, n_out)"""
+        """Full-sequence forward.  x_seq: (T, n_in)  →  (T, n_out)
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         x_seq_3d, squeeze_batch = _normalize_sequence_input(x_seq, expected_in=self.n_in)
         B = x_seq_3d.shape[1]
         if self.state is None or self.state.shape[0] != B:
@@ -665,6 +1089,15 @@ class ParallelRecurrentCell(torch.nn.Module):
         return y.squeeze(1) if squeeze_batch else y
 
     def get_state(self, clone: bool = True, detach: bool = True) -> torch.Tensor:
+        """Return the current state snapshot.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if self.state is None:
             return torch.empty(0, device=self.rnn.weight_hh_l0.device, dtype=self.rnn.weight_hh_l0.dtype)
         s = self.state
@@ -675,6 +1108,16 @@ class ParallelRecurrentCell(torch.nn.Module):
         return s
 
     def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True):
+        """Restore the current state snapshot.
+
+        Args:
+            state (torch.Tensor): The state value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if state.numel() == 0:
             self.state = None
             return
@@ -693,6 +1136,18 @@ def _build_recurrent_cell(
     recurrent_type: str,
     recurrent_kwargs: dict | None = None,
 ):
+    """Build the recurrent cell.
+
+    Args:
+        n_in (Any): The n in value.
+        n_out (Any): The n out value.
+        activation (Any): The activation value.
+        recurrent_type (str): The recurrent type value.
+        recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     mode = (recurrent_type or "simple").lower()
     if mode in ("simple", "rnn", "recurrent"):
         return RecurrentCell(n_in, n_out, act=activation)
@@ -732,6 +1187,22 @@ def _build_recurrent_cell(
 
 
 class RecurrentNetwork(torch.nn.Module):
+    """
+    Stack of recurrent cells with an optional output activation.
+
+    Given a stack of $L$ recurrent cells, each layer computes
+    \\[
+        h_t^{(0)} = x_t, \\qquad
+        h_t^{(\\ell)} = f_\\ell(h_t^{(\\ell-1)}, h_{t-1}^{(\\ell)}),
+        \\quad \\ell=1,\\dots,L.
+    \\]
+    The network output is
+    \\[
+        y_t = g(h_t^{(L)}),
+    \\]
+    where $g$ is ``out_act``. The implementation supports single-step inputs
+    and full sequences while keeping one state snapshot per recurrent layer.
+    """
     def __init__(
         self,
         n_in,
@@ -742,6 +1213,20 @@ class RecurrentNetwork(torch.nn.Module):
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
     ):
+        """Initialize the instance.
+
+        Args:
+            n_in (Any): The n in value.
+            n_out (Any): The n out value.
+            hidden_dims (Any): The hidden dims value. Defaults to ``None``.
+            activation (Any): The activation value. Defaults to ``torch.tanh``.
+            out_act (Any): The out act value. Defaults to ``torch.nn.Identity()``.
+            recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
+            recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         hidden_dims = hidden_dims or []
         self.n_in = n_in
@@ -759,20 +1244,37 @@ class RecurrentNetwork(torch.nn.Module):
         self.out = torch.nn.Linear(prev, n_out)
 
     def reset(self, batch_size, device=None, dtype=None):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (Any): The batch size value.
+            device (Any): The device value. Defaults to ``None``.
+            dtype (Any): The dtype value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         dev = device if device is not None else self.out.weight.device
         dt = dtype if dtype is not None else self.out.weight.dtype
         for cell in self.cells:
             cell.reset(batch_size, device=dev, dtype=dt)
 
     def forward(self, x):
+        """Compute the forward pass.
+
+        Args:
+            x (Any): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         z = x.view(-1, self.n_in)
         for cell in self.cells:
             z = cell(z)
         return self.out_act(self.out(z))
 
     def forward_seq(self, x_seq: torch.Tensor) -> torch.Tensor:
-        """
-        Process a full sequence in one call.
+        """Process a full sequence in one call.
 
         x_seq: (T, n_in)  →  (T, n_out)
 
@@ -782,6 +1284,12 @@ class RecurrentNetwork(torch.nn.Module):
 
         nn.Linear supports arbitrary leading dimensions, so self.out(z) on a
         (T, prev_dim) tensor produces (T, n_out) correctly with no extra code.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         z = x_seq  # (T, n_in)
         for cell in self.cells:
@@ -789,6 +1297,15 @@ class RecurrentNetwork(torch.nn.Module):
         return self.out_act(self.out(z))  # (T, n_out)
 
     def get_states(self, clone: bool = True, detach: bool = True) -> list[RecurrentState]:
+        """Return a snapshot of recurrent states.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            list[RecurrentState]: The computed or requested result.
+        """
         return [cell.get_state(clone=clone, detach=detach) for cell in self.cells]
 
     def set_states(
@@ -798,6 +1315,17 @@ class RecurrentNetwork(torch.nn.Module):
         detach: bool = True,
         strict: bool = True,
     ):
+        """Restore recurrent states from a snapshot.
+
+        Args:
+            states (list[RecurrentState]): The states value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         states = states or []
         if strict and len(states) != len(self.cells):
             raise ValueError(f"Expected {len(self.cells)} cell states, got {len(states)}.")
@@ -805,15 +1333,34 @@ class RecurrentNetwork(torch.nn.Module):
             cell.set_state(s, clone=clone, detach=detach)
 
     def plastic_modules(self) -> list[torch.nn.Module]:
+        """Plastic modules for RecurrentNetwork.
+
+        Returns:
+            list[torch.nn.Module]: The computed or requested result.
+        """
         return _collect_plastic_modules(self.cells)
 
     def plastic_parameters(self) -> list[torch.nn.Parameter]:
+        """Plastic parameters for RecurrentNetwork.
+
+        Returns:
+            list[torch.nn.Parameter]: The computed or requested result.
+        """
         params = []
         for cell in self.plastic_modules():
             params.extend(cell.plastic_parameters())
         return params
 
     def get_online_traces(self, clone: bool = True, detach: bool = True) -> list[dict[str, torch.Tensor] | None]:
+        """Return the online traces.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            list[dict[str, torch.Tensor] | None]: The computed or requested result.
+        """
         traces = []
         for cell in self.cells:
             if hasattr(cell, "get_online_trace"):
@@ -829,6 +1376,17 @@ class RecurrentNetwork(torch.nn.Module):
         detach: bool = True,
         strict: bool = True,
     ):
+        """Set the online traces.
+
+        Args:
+            traces (list[dict[str, torch.Tensor] | None]): The traces value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         traces = traces or []
         if strict and len(traces) != len(self.cells):
             raise ValueError(f"Expected {len(self.cells)} cell traces, got {len(traces)}.")
@@ -837,10 +1395,20 @@ class RecurrentNetwork(torch.nn.Module):
                 cell.set_online_trace(trace, clone=clone, detach=detach)
 
     def online_update(self, loss: torch.Tensor, *, retain_graph: bool = False) -> bool:
+        """Online update for RecurrentNetwork.
+
+        Args:
+            loss (torch.Tensor): The loss value.
+            retain_graph (bool): The retain graph value. Defaults to ``False``.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         return _apply_online_updates(self.cells, loss, retain_graph=retain_graph)
 
 
 class RecurrentActionValueNetwork(torch.nn.Module):
+    """RecurrentActionValueNetwork network module for neural network architectures and reusable model components."""
     def __init__(
         self,
         state_dim,
@@ -852,6 +1420,21 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
     ):
+        """Initialize the instance.
+
+        Args:
+            state_dim (Any): The state dim value.
+            action_dim (Any): The action dim value.
+            hidden_dims (Any): The hidden dims value. Defaults to ``None``.
+            hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
+            hidden_dims_value (Any): The hidden dims value value. Defaults to ``None``.
+            activation (Any): The activation value. Defaults to ``torch.tanh``.
+            recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
+            recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         hidden_dims = hidden_dims or []
         hidden_dims_actor = hidden_dims_actor or []
@@ -874,6 +1457,14 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         self.value = RecurrentNetwork(prev, 1, hidden_dims=hidden_dims_value, activation=activation, recurrent_type=recurrent_type, recurrent_kwargs=self.recurrent_kwargs)
 
     def reset(self, batch_size: int = 1):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         dev = next(self.parameters()).device
         dt = next(self.parameters()).dtype
         for cell in self.layers:
@@ -882,17 +1473,30 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         self.value.reset(batch_size, device=dev, dtype=dt)
 
     def forward(self, x):
+        """Compute the forward pass.
+
+        Args:
+            x (Any): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         z = x.view(-1, self.state_dim)
         for layer in self.layers:
             z = layer(z)
         return z
 
     def _forward_seq_trunk(self, x_seq: torch.Tensor) -> torch.Tensor:
-        """
-        x_seq: (T, state_dim)  →  (T, trunk_out_dim)
+        """x_seq: (T, state_dim)  →  (T, trunk_out_dim)
 
         Runs each trunk cell's forward_seq (CuDNN path for GRU) and applies
         the same outer activation as the single-step forward().
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         z = x_seq
         for cell in self.layers:
@@ -900,29 +1504,78 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         return z
 
     def forward_seq(self, x_seq: torch.Tensor) -> torch.Tensor:
-        """
-        x_seq: (T, state_dim)  →  (T, trunk_out_dim)
+        """x_seq: (T, state_dim)  →  (T, trunk_out_dim)
         Alias kept for symmetry; heads call their own forward_seq separately.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         return self._forward_seq_trunk(x_seq)
 
     def a(self, x):
+        """A for RecurrentActionValueNetwork.
+
+        Args:
+            x (Any): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return self.actor(self.forward(x))
 
     def v(self, x):
+        """V for RecurrentActionValueNetwork.
+
+        Args:
+            x (Any): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return self.value(self.forward(x))
 
     def av(self, x):
+        """Av for RecurrentActionValueNetwork.
+
+        Args:
+            x (Any): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         z = self.forward(x)
         return self.actor(z), self.value(z)
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        """Return a snapshot of recurrent states.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         trunk = [cell.get_state(clone=clone, detach=detach) for cell in self.layers]
         actor = self.actor.get_states(clone=clone, detach=detach)
         value = self.value.get_states(clone=clone, detach=detach)
         return {"trunk": trunk, "actor": actor, "value": value}
 
     def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+        """Restore recurrent states from a snapshot.
+
+        Args:
+            states (dict): The states value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if strict:
             for k in ("trunk", "actor", "value"):
                 if k not in states:
@@ -938,15 +1591,34 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         self.value.set_states(value_states, clone=clone, detach=detach, strict=strict)
 
     def plastic_modules(self) -> list[torch.nn.Module]:
+        """Plastic modules for RecurrentActionValueNetwork.
+
+        Returns:
+            list[torch.nn.Module]: The computed or requested result.
+        """
         return _collect_plastic_modules(self.layers) + self.actor.plastic_modules() + self.value.plastic_modules()
 
     def plastic_parameters(self) -> list[torch.nn.Parameter]:
+        """Plastic parameters for RecurrentActionValueNetwork.
+
+        Returns:
+            list[torch.nn.Parameter]: The computed or requested result.
+        """
         params = []
         for module in self.plastic_modules():
             params.extend(module.plastic_parameters())
         return params
 
     def get_online_traces(self, clone: bool = True, detach: bool = True) -> dict:
+        """Return the online traces.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         trunk = []
         for cell in self.layers:
             if hasattr(cell, "get_online_trace"):
@@ -956,6 +1628,17 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         return {"trunk": trunk, "actor": self.actor.get_online_traces(clone=clone, detach=detach), "value": self.value.get_online_traces(clone=clone, detach=detach)}
 
     def set_online_traces(self, traces: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+        """Set the online traces.
+
+        Args:
+            traces (dict): The traces value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         traces = traces or {}
         if strict:
             for key in ("trunk", "actor", "value"):
@@ -973,6 +1656,15 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         self.value.set_online_traces(value_traces, clone=clone, detach=detach, strict=strict)
 
     def online_update(self, loss: torch.Tensor, *, retain_graph: bool = False) -> bool:
+        """Online update for RecurrentActionValueNetwork.
+
+        Args:
+            loss (torch.Tensor): The loss value.
+            retain_graph (bool): The retain graph value. Defaults to ``False``.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         return _apply_online_updates(self.plastic_modules(), loss, retain_graph=retain_graph)
 
 
@@ -995,6 +1687,21 @@ class RecurrentActionQNetwork(torch.nn.Module):
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
     ):
+        """Initialize the instance.
+
+        Args:
+            state_dim (Any): The state dim value.
+            action_dim (Any): The action dim value.
+            hidden_dims (Any): The hidden dims value. Defaults to ``None``.
+            hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
+            hidden_dims_q (Any): The hidden dims q value. Defaults to ``None``.
+            activation (Any): The activation value. Defaults to ``torch.relu``.
+            recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
+            recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         hidden_dims = hidden_dims or []
         hidden_dims_actor = hidden_dims_actor or []
@@ -1017,6 +1724,14 @@ class RecurrentActionQNetwork(torch.nn.Module):
         self.q     = RecurrentNetwork(prev, action_dim, hidden_dims=hidden_dims_q,     activation=activation, recurrent_type=recurrent_type, recurrent_kwargs=self.recurrent_kwargs)
 
     def reset(self, batch_size: int = 1):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         dev = next(self.parameters()).device
         dt  = next(self.parameters()).dtype
         for cell in self.layers:
@@ -1025,17 +1740,29 @@ class RecurrentActionQNetwork(torch.nn.Module):
         self.q.reset(batch_size, device=dev, dtype=dt)
 
     def _trunk(self, x: torch.Tensor) -> torch.Tensor:
-        """Single-step trunk forward.  x: (B, state_dim) → (B, trunk_out_dim)"""
+        """Single-step trunk forward.  x: (B, state_dim) → (B, trunk_out_dim)
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         z = x.view(-1, self.state_dim)
         for layer in self.layers:
             z = layer(z)
         return z
 
     def _trunk_seq(self, x_seq: torch.Tensor) -> torch.Tensor:
-        """
-        Full-sequence trunk forward.  x_seq: (T, state_dim) → (T, trunk_out_dim)
+        """Full-sequence trunk forward.  x_seq: (T, state_dim) → (T, trunk_out_dim)
 
         Uses each cell's forward_seq(); for GRU this is the CuDNN fused kernel.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         z = x_seq
         for cell in self.layers:
@@ -1043,21 +1770,25 @@ class RecurrentActionQNetwork(torch.nn.Module):
         return z
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Single-step forward.  Returns (logits, q_values), each (B, action_dim)."""
+        """Single-step forward.  Returns (logits, q_values), each (B, action_dim).
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         z = self._trunk(x)
         return self.actor(z), self.q(z)
 
     def forward_seq(self, x_seq: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Full-sequence forward.  x_seq: (T, state_dim)
+        """Full-sequence forward.  x_seq: (T, state_dim)
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
 
         Returns:
-          logits_seq : (T, action_dim)
-          q_seq      : (T, action_dim)
-
-        The trunk runs via CuDNN for GRU; the actor and Q heads run their own
-        forward_seq() so their recurrent cells also benefit from the same path.
-        nn.Linear handles (T, dim) inputs natively — no extra looping needed.
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
         """
         z = self._trunk_seq(x_seq)              # (T, trunk_out_dim)
         logits_seq = self.actor.forward_seq(z)  # (T, action_dim)
@@ -1065,10 +1796,30 @@ class RecurrentActionQNetwork(torch.nn.Module):
         return logits_seq, q_seq
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        """Return a snapshot of recurrent states.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         trunk = [cell.get_state(clone=clone, detach=detach) for cell in self.layers]
         return {"trunk": trunk, "actor": self.actor.get_states(clone=clone, detach=detach), "q": self.q.get_states(clone=clone, detach=detach)}
 
     def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+        """Restore recurrent states from a snapshot.
+
+        Args:
+            states (dict): The states value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if strict:
             for k in ("trunk", "actor", "q"):
                 if k not in states:
@@ -1082,13 +1833,32 @@ class RecurrentActionQNetwork(torch.nn.Module):
         self.q.set_states(states.get("q", []), clone=clone, detach=detach, strict=strict)
 
     def plastic_modules(self) -> list[torch.nn.Module]:
+        """Plastic modules for RecurrentActionQNetwork.
+
+        Returns:
+            list[torch.nn.Module]: The computed or requested result.
+        """
         return _collect_plastic_modules(self.layers) + self.actor.plastic_modules() + self.q.plastic_modules()
 
     def plastic_parameters(self) -> list[torch.nn.Parameter]:
+        """Plastic parameters for RecurrentActionQNetwork.
+
+        Returns:
+            list[torch.nn.Parameter]: The computed or requested result.
+        """
         params = []
         for module in self.plastic_modules():
             params.extend(module.plastic_parameters())
         return params
 
     def online_update(self, loss: torch.Tensor, *, retain_graph: bool = False) -> bool:
+        """Online update for RecurrentActionQNetwork.
+
+        Args:
+            loss (torch.Tensor): The loss value.
+            retain_graph (bool): The retain graph value. Defaults to ``False``.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         return _apply_online_updates(self.plastic_modules(), loss, retain_graph=retain_graph)

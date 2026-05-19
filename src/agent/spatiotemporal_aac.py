@@ -1,3 +1,4 @@
+"""Spatiotemporal aac utilities for reinforcement-learning agents and training utilities."""
 import torch
 
 from src.agent.utils import (
@@ -52,6 +53,27 @@ class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
     ):
+        """Initialize the instance.
+
+        Args:
+            network (dict): The network value.
+            n_assets (int): The n assets value.
+            n_buckets (int): The n buckets value.
+            context_length (int): The context length value. Defaults to ``64``.
+            gamma (float): The gamma value. Defaults to ``0.999``.
+            vf_coef (float): The vf coef value. Defaults to ``0.5``.
+            ent_coef (float): The ent coef value. Defaults to ``0.01``.
+            aux_coef (float): The aux coef value. Defaults to ``0.05``.
+            aux_loss_coefs (dict[str, float] | None): The aux loss coefs value. Defaults to ``None``.
+            normalize_advantages (bool): The normalize advantages value. Defaults to ``True``.
+            advantage_type (str): The advantage type value. Defaults to ``'td0'``.
+            gae_lambda (float): The gae lambda value. Defaults to ``0.95``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            device (str): The device value. Defaults to ``'cpu'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if advantage_type not in ("td0", "gae", "mc"):
             raise ValueError(f"advantage_type must be 'td0', 'gae', or 'mc', got '{advantage_type}'.")
 
@@ -95,19 +117,37 @@ class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
     # ------------------------------------------------------------------
 
     def _init_ctx_buf(self, ref_state: torch.Tensor) -> None:
-        """Allocate a zero-filled context buffer matching ref_state's shape."""
+        """Allocate a zero-filled context buffer matching ref_state's shape.
+
+        Args:
+            ref_state (torch.Tensor): The ref state value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         shape = (self.context_length, *ref_state.shape)
         self._ctx_buf = torch.zeros(shape, device=self.device, dtype=self.dtype)
 
     def _push_ctx(self, state: torch.Tensor) -> None:
-        """Shift the context buffer left by one and append state at the end."""
+        """Shift the context buffer left by one and append state at the end.
+
+        Args:
+            state (torch.Tensor): The state value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         state = state.to(device=self.device, dtype=self.dtype)
         if self._ctx_buf is None or self._ctx_buf.shape[1:] != state.shape:
             self._init_ctx_buf(state)
         self._ctx_buf = torch.cat([self._ctx_buf[1:], state.unsqueeze(0).detach()], dim=0)
 
     def _snapshot_ctx(self) -> torch.Tensor | None:
-        """Return a detached clone of the current context buffer, or None."""
+        """Return a detached clone of the current context buffer, or None.
+
+        Returns:
+            torch.Tensor | None: The computed or requested result.
+        """
         if self._ctx_buf is None:
             return None
         return self._ctx_buf.clone().detach()
@@ -117,10 +157,29 @@ class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
     # ------------------------------------------------------------------
 
     def reset(self, batch_size: int = 1) -> None:
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.net.reset(batch_size)
         self._ctx_buf = None
 
     def act(self, state: torch.Tensor, mask: dict | None = None, explore: bool = False, grad_enabled: bool = False):
+        """Act for SpatiotemporalHierarchicalAACAgent.
+
+        Args:
+            state (torch.Tensor): The state value.
+            mask (dict | None): The mask value. Defaults to ``None``.
+            explore (bool): The explore value. Defaults to ``False``.
+            grad_enabled (bool): The grad enabled value. Defaults to ``False``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         with torch.set_grad_enabled(grad_enabled):
             state = state.to(dtype=self.dtype, device=self.device)
             logits, _, _ = _unpack_policy_value_aux(self.net(state))
@@ -129,11 +188,33 @@ class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
         return action if grad_enabled else action.cpu()
 
     def store(self, state, action, reward, done, mask=None, aux_target=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            mask (Any): The mask value. Defaults to ``None``.
+            aux_target (Any): The aux target value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         state_t = state if isinstance(state, torch.Tensor) else torch.as_tensor(state)
         self._push_ctx(state_t.detach())
         self.buffer.store(state, action, reward, done, mask=mask, aux_target=aux_target)
 
     def init_optimizer(self, lr, optim="AdamW"):
+        """Init optimizer for SpatiotemporalHierarchicalAACAgent.
+
+        Args:
+            lr (Any): The lr value.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         opt_cls = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
@@ -142,11 +223,18 @@ class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
     # ------------------------------------------------------------------
 
     def infer_from_seq(self, state_seq, h0=None, ctx0=None):
-        """
-        Run forward_seq with an optional context prefix.
+        """Run forward_seq with an optional context prefix.
 
         ctx0 : (context_length, [B,] state_dim) prepended before state_seq.
                Outputs are sliced to remove the context prefix before returning.
+
+        Args:
+            state_seq (Any): The state seq value.
+            h0 (Any): The h0 value. Defaults to ``None``.
+            ctx0 (Any): The ctx0 value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
         """
         C = 0
         if ctx0 is not None and ctx0.shape[0] > 0:
@@ -168,6 +256,16 @@ class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
         return logits, values, aux
 
     def compute_advantages(self, last_next_state: torch.Tensor, h0=None, ctx0=None):
+        """Compute the advantages.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (Any): The h0 value. Defaults to ``None``.
+            ctx0 (Any): The ctx0 value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         states, actions, rewards, dones, masks, aux_targets = self.buffer.to_tensors(self.device, self.dtype)
         rewards = rewards.squeeze(-1) if rewards.dim() > actions.dim() - 1 else rewards
         dones = dones.squeeze(-1) if dones.dim() > actions.dim() - 1 else dones
@@ -212,6 +310,17 @@ class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
         ctx0: torch.Tensor | None = None,
         max_grad_norm: float | None = None,
     ):
+        """Apply one update step.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+            ctx0 (torch.Tensor | None): The ctx0 value. Defaults to ``None``.
+            max_grad_norm (float | None): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
         if len(self.buffer) == 0:
@@ -254,9 +363,26 @@ class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
         return metrics
 
     def save(self, path: str):
+        """Save for SpatiotemporalHierarchicalAACAgent.
+
+        Args:
+            path (str): The path value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         torch.save({"network": self.net.state_dict()}, path)
 
     def load(self, path: str, strict: bool = True):
+        """Load for SpatiotemporalHierarchicalAACAgent.
+
+        Args:
+            path (str): The path value.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         ckpt = torch.load(path, map_location=self.device)
         self.net.load_state_dict(ckpt["network"], strict=strict)
 
@@ -285,6 +411,30 @@ class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
         volume=None,
         times=None,
     ):
+        """Train on historical for SpatiotemporalHierarchicalAACAgent.
+
+        Args:
+            env (Any): The env value.
+            data (Any): The data value.
+            n_episodes (Any): The n episodes value.
+            max_steps (Any): The max steps value. Defaults to ``2000``.
+            warm_up (Any): The warm up value. Defaults to ``0``.
+            update_interval (Any): The update interval value. Defaults to ``100``.
+            burn_in_updates (Any): The burn in updates value. Defaults to ``0``.
+            lr (Any): The lr value. Defaults to ``0.0003``.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
+            store_results (Any): The store results value. Defaults to ``True``.
+            max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
+            open_ (Any): The open value. Defaults to ``None``.
+            high (Any): The high value. Defaults to ``None``.
+            low (Any): The low value. Defaults to ``None``.
+            volume (Any): The volume value. Defaults to ``None``.
+            times (Any): The times value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
@@ -401,6 +551,30 @@ class SpatiotemporalHierarchicalAACAgent(_HierarchicalPolicyMixin):
         store_results=True,
         max_grad_norm=None,
     ):
+        """Train on historical bat for SpatiotemporalHierarchicalAACAgent.
+
+        Args:
+            bat_env (Any): The bat env value.
+            open_ (Any): The open value.
+            close (Any): The close value.
+            high (Any): The high value.
+            low (Any): The low value.
+            volume (Any): The volume value.
+            times (Any): The times value.
+            n_episodes (Any): The n episodes value.
+            max_steps (Any): The max steps value. Defaults to ``2000``.
+            warm_up (Any): The warm up value. Defaults to ``0``.
+            update_interval (Any): The update interval value. Defaults to ``100``.
+            burn_in_updates (Any): The burn in updates value. Defaults to ``1``.
+            lr (Any): The lr value. Defaults to ``0.0003``.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
+            store_results (Any): The store results value. Defaults to ``True``.
+            max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 

@@ -1,3 +1,4 @@
+"""Newsapi utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 import os
@@ -32,6 +33,22 @@ class NewsApiSource(NewsSource):
         max_pages: int = 5,
         sort_by: str = "publishedAt",
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            name (str): The name value.
+            credibility (float): The credibility value.
+            asset_universe (list[str]): The asset universe value.
+            aliases (dict[str, list[str]] | None): The aliases value. Defaults to ``None``.
+            api_key_env (str): The api key env value. Defaults to ``'NEWSAPI_KEY'``.
+            language (str): The language value. Defaults to ``'en'``.
+            page_size (int): The page size value. Defaults to ``100``.
+            max_pages (int): The max pages value. Defaults to ``5``.
+            sort_by (str): The sort by value. Defaults to ``'publishedAt'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(name=name, credibility=credibility, asset_universe=asset_universe)
         self._api_key = os.getenv(api_key_env, "")
         self._aliases = aliases or {}
@@ -41,6 +58,15 @@ class NewsApiSource(NewsSource):
         self._sort_by = sort_by
 
     def fetch(self, since: datetime, until: datetime) -> Iterator[RawArticle]:
+        """Fetch items from the configured source.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         if not self._api_key:
             raise RuntimeError("NEWSAPI_KEY is not set")
 
@@ -87,6 +113,14 @@ class NewsApiSource(NewsSource):
 
 
 def _parse_iso(ts: str | None) -> datetime | None:
+    """Parse the iso.
+
+    Args:
+        ts (str | None): The ts value.
+
+    Returns:
+        datetime | None: The computed or requested result.
+    """
     if not ts:
         return None
     if ts.endswith("Z"):

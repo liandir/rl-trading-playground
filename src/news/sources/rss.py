@@ -1,3 +1,4 @@
+"""Rss utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -28,12 +29,34 @@ class RssSource(NewsSource):
         language: str | None = "en",
         fetch_body: bool = False,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            name (str): The name value.
+            credibility (float): The credibility value.
+            asset_universe (list[str]): The asset universe value.
+            feeds (list[str]): The feeds value.
+            language (str | None): The language value. Defaults to ``'en'``.
+            fetch_body (bool): The fetch body value. Defaults to ``False``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(name=name, credibility=credibility, asset_universe=asset_universe)
         self.feeds = list(feeds)
         self.language = language
         self.fetch_body = bool(fetch_body)
 
     def fetch(self, since: datetime, until: datetime) -> Iterator[RawArticle]:
+        """Fetch items from the configured source.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         try:
             import feedparser  # type: ignore[import-not-found]
         except ModuleNotFoundError as e:  # pragma: no cover
@@ -70,6 +93,14 @@ class RssSource(NewsSource):
 
 
 def _entry_timestamp(entry: Any) -> datetime | None:
+    """Entry timestamp for news collection, tagging, deduplication, and storage utilities.
+
+    Args:
+        entry (Any): The entry value.
+
+    Returns:
+        datetime | None: The computed or requested result.
+    """
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
     if not parsed:
         return None
@@ -78,6 +109,14 @@ def _entry_timestamp(entry: Any) -> datetime | None:
 
 
 def _entry_to_dict(entry: Any) -> dict[str, Any]:
+    """Entry to dict for news collection, tagging, deduplication, and storage utilities.
+
+    Args:
+        entry (Any): The entry value.
+
+    Returns:
+        dict[str, Any]: The computed or requested result.
+    """
     out: dict[str, Any] = {}
     for k in ("title", "link", "id", "summary", "published", "updated", "author"):
         v = entry.get(k)
@@ -87,6 +126,14 @@ def _entry_to_dict(entry: Any) -> dict[str, Any]:
 
 
 def _extract_body(url: str) -> str | None:
+    """Extract body for news collection, tagging, deduplication, and storage utilities.
+
+    Args:
+        url (str): The url value.
+
+    Returns:
+        str | None: The computed or requested result.
+    """
     try:
         import trafilatura  # type: ignore[import-not-found]
     except ModuleNotFoundError:

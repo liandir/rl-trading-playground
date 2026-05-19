@@ -1,13 +1,30 @@
+"""Utils utilities for reinforcement-learning agents and training utilities."""
 import torch
 import torch.nn.functional as F
 
 
 def apply_action_mask(logits: torch.Tensor, valid: torch.BoolTensor) -> torch.Tensor:
-    """Set logits of invalid actions to -inf before sampling or loss computation."""
+    """Set logits of invalid actions to -inf before sampling or loss computation.
+
+    Args:
+        logits (torch.Tensor): The logits value.
+        valid (torch.BoolTensor): The valid value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
+    """
     return logits.masked_fill(~valid, float("-inf"))
 
 
 def _fmt_sim_elapsed(elapsed_seconds: float) -> str:
+    """Fmt sim elapsed for reinforcement-learning agents and training utilities.
+
+    Args:
+        elapsed_seconds (float): The elapsed seconds value.
+
+    Returns:
+        str: The computed or requested result.
+    """
     s = int(elapsed_seconds)
     d = s // 86400
     h = (s % 86400) // 3600
@@ -15,12 +32,19 @@ def _fmt_sim_elapsed(elapsed_seconds: float) -> str:
 
 
 def _sample_start_indices(total_points: int, max_steps: int, batch_size: int = 1) -> torch.Tensor:
-    """
-    Sample valid reset indices for rollouts of ``max_steps`` environment steps.
+    """Sample valid reset indices for rollouts of ``max_steps`` environment steps.
 
     Reset consumes one data point and each environment step consumes one future
     point, so a full rollout requires at least ``max_steps + 1`` aligned market
     observations. Valid starts therefore lie in ``[0, total_points - max_steps)``.
+
+    Args:
+        total_points (int): The total points value.
+        max_steps (int): The max steps value.
+        batch_size (int): The batch size value. Defaults to ``1``.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
     """
     if max_steps <= 0:
         raise ValueError(f"max_steps must be positive, got {max_steps}.")
@@ -42,11 +66,21 @@ def _compute_gae(
     gamma: float,
     lam: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Generalised Advantage Estimation.
+    """Generalised Advantage Estimation.
 
     Returns ``(advantages, returns)`` where returns are used as critic targets.
     Inputs are expected to have leading time dimension first: ``(T, ...)``.
+
+    Args:
+        rewards (torch.Tensor): The rewards value.
+        dones (torch.Tensor): The dones value.
+        v_t (torch.Tensor): The v t value.
+        v_tp1 (torch.Tensor): The v tp1 value.
+        gamma (float): The gamma value.
+        lam (float): The lam value.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
     """
     deltas = rewards + gamma * (1.0 - dones) * v_tp1 - v_t
 
@@ -71,7 +105,18 @@ def _compute_mc(
     v_tp1_last: torch.Tensor,
     gamma: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Discounted Monte Carlo returns with bootstrap from the final next value."""
+    """Discounted Monte Carlo returns with bootstrap from the final next value.
+
+    Args:
+        rewards (torch.Tensor): The rewards value.
+        dones (torch.Tensor): The dones value.
+        v_t (torch.Tensor): The v t value.
+        v_tp1_last (torch.Tensor): The v tp1 last value.
+        gamma (float): The gamma value.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+    """
     T = rewards.shape[0]
     returns = torch.empty_like(rewards)
     g = v_tp1_last
@@ -98,14 +143,33 @@ UPDATE_METRIC_NAMES = (
 
 
 def _empty_update_metrics() -> dict[str, list[float]]:
+    """Empty update metrics for reinforcement-learning agents and training utilities.
+
+    Returns:
+        dict[str, list[float]]: The computed or requested result.
+    """
     return {name: [0.0] for name in UPDATE_METRIC_NAMES}
 
 
 def _init_update_metrics() -> dict[str, list[float]]:
+    """Init update metrics for reinforcement-learning agents and training utilities.
+
+    Returns:
+        dict[str, list[float]]: The computed or requested result.
+    """
     return {name: [] for name in UPDATE_METRIC_NAMES}
 
 
 def _explained_variance(targets: torch.Tensor, residuals: torch.Tensor) -> torch.Tensor:
+    """Explained variance for reinforcement-learning agents and training utilities.
+
+    Args:
+        targets (torch.Tensor): The targets value.
+        residuals (torch.Tensor): The residuals value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
+    """
     target_var = targets.var(unbiased=False)
     if float(target_var.detach().cpu().item()) <= 1e-12:
         return torch.zeros((), device=targets.device, dtype=targets.dtype)
@@ -125,6 +189,23 @@ def _append_update_metrics(
     entropy: torch.Tensor,
     loss: torch.Tensor,
 ):
+    """Append update metrics for reinforcement-learning agents and training utilities.
+
+    Args:
+        metric_store (dict[str, list[float]]): The metric store value.
+        logits (torch.Tensor): The logits value.
+        log_probs (torch.Tensor): The log probs value.
+        values (torch.Tensor): The values value.
+        returns (torch.Tensor): The returns value.
+        raw_advantages (torch.Tensor): The raw advantages value.
+        policy_objective (torch.Tensor): The policy objective value.
+        value_loss (torch.Tensor): The value loss value.
+        entropy (torch.Tensor): The entropy value.
+        loss (torch.Tensor): The loss value.
+
+    Returns:
+        None: This function does not return a value.
+    """
     probs = torch.softmax(logits.detach(), dim=-1)
     values_detached = values.detach()
     returns_detached = returns.detach()
@@ -149,9 +230,15 @@ def _append_update_metrics(
 
 
 def _gather_per_asset_mask(mask: torch.Tensor, asset_idx: torch.Tensor) -> torch.Tensor:
-    """
-    ``mask``: ``(..., N, K)`` bool, ``asset_idx``: ``(...)`` long.
+    """``mask``: ``(..., N, K)`` bool, ``asset_idx``: ``(...)`` long.
     Returns the per-state slice ``mask[..., asset_idx, :]``.
+
+    Args:
+        mask (torch.Tensor): The mask value.
+        asset_idx (torch.Tensor): The asset idx value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
     """
     expected_ndim = asset_idx.ndim + 2
     while mask.ndim < expected_ndim:
@@ -167,6 +254,16 @@ def _gather_per_asset_mask(mask: torch.Tensor, asset_idx: torch.Tensor) -> torch
 
 
 def _split_logits(logits: torch.Tensor, primary_dim: int, K: int):
+    """Split logits for reinforcement-learning agents and training utilities.
+
+    Args:
+        logits (torch.Tensor): The logits value.
+        primary_dim (int): The primary dim value.
+        K (int): The k value.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     logits_d = logits[..., :primary_dim]
     logits_buy = logits[..., primary_dim:primary_dim + K]
     logits_sell = logits[..., primary_dim + K:primary_dim + 2 * K]
@@ -174,7 +271,19 @@ def _split_logits(logits: torch.Tensor, primary_dim: int, K: int):
 
 
 def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=None, open_=None):
-    """Normalize historical inputs for single-environment training."""
+    """Normalize historical inputs for single-environment training.
+
+    Args:
+        data (Any): The data value.
+        high (Any): The high value. Defaults to ``None``.
+        low (Any): The low value. Defaults to ``None``.
+        volume (Any): The volume value. Defaults to ``None``.
+        times (Any): The times value. Defaults to ``None``.
+        open_ (Any): The open value. Defaults to ``None``.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     if isinstance(data, torch.Tensor):
         close = data
         missing = [
@@ -210,12 +319,39 @@ def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=
                 raise ValueError(f"{name} must have leading dimension {T}, got {value.shape[0]}.")
 
         def time_at(idx: int) -> float:
+            """Time at for reinforcement-learning agents and training utilities.
+
+            Args:
+                idx (int): The idx value.
+
+            Returns:
+                float: The computed or requested result.
+            """
             return float(times[idx])
 
         def reset_env(env, idx: int):
+            """Reset env for reinforcement-learning agents and training utilities.
+
+            Args:
+                env (Any): The env value.
+                idx (int): The idx value.
+
+            Returns:
+                Any: The computed or requested result.
+            """
             return env.reset(open_[idx], close[idx], high[idx], low[idx], volume[idx], times[idx])
 
         def step_env(env, action, idx: int):
+            """Step env for reinforcement-learning agents and training utilities.
+
+            Args:
+                env (Any): The env value.
+                action (Any): The action value.
+                idx (int): The idx value.
+
+            Returns:
+                Any: The computed or requested result.
+            """
             return env.step(action, open_[idx], close[idx], high[idx], low[idx], volume[idx], times[idx])
 
         return T, time_at, reset_env, step_env
@@ -226,18 +362,53 @@ def _resolve_historical_source(data, *, high=None, low=None, volume=None, times=
     T = len(data)
 
     def time_at(idx: int) -> float:
+        """Time at for reinforcement-learning agents and training utilities.
+
+        Args:
+            idx (int): The idx value.
+
+        Returns:
+            float: The computed or requested result.
+        """
         return float(data[idx]["time"])
 
     def reset_env(env, idx: int):
+        """Reset env for reinforcement-learning agents and training utilities.
+
+        Args:
+            env (Any): The env value.
+            idx (int): The idx value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return env.reset(data[idx])
 
     def step_env(env, action, idx: int):
+        """Step env for reinforcement-learning agents and training utilities.
+
+        Args:
+            env (Any): The env value.
+            action (Any): The action value.
+            idx (int): The idx value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return env.step(action, data=data[idx])
 
     return T, time_at, reset_env, step_env
 
 
 def _unpack_policy_value_aux(output):
+    """Unpack policy value aux for reinforcement-learning agents and training utilities.
+
+    Args:
+        output (Any): The output value.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     if not isinstance(output, tuple) or len(output) != 3:
         raise ValueError(
             "Auxiliary hierarchical agents require a network returning "
@@ -247,12 +418,32 @@ def _unpack_policy_value_aux(output):
 
 
 def _close_from_historical(data):
+    """Close from historical for reinforcement-learning agents and training utilities.
+
+    Args:
+        data (Any): The data value.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     if isinstance(data, torch.Tensor):
         return data
     return torch.stack([step["close"] for step in data])
 
 
 def _build_aux_target(close: torch.Tensor, index, horizons, *, reward=None, eps: float = 1e-12):
+    """Build the aux target.
+
+    Args:
+        close (torch.Tensor): The close value.
+        index (Any): The index value.
+        horizons (Any): The horizons value.
+        reward (Any): The reward value. Defaults to ``None``.
+        eps (float): The eps value. Defaults to ``1e-12``.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     device = close.device
     idx = torch.as_tensor(index, device=device, dtype=torch.long)
     squeeze = idx.dim() == 0
@@ -292,6 +483,17 @@ def _aux_loss(
     rewards: torch.Tensor,
     coefs: dict[str, float],
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Aux loss for reinforcement-learning agents and training utilities.
+
+    Args:
+        aux (dict[str, torch.Tensor]): The aux value.
+        aux_targets (dict[str, torch.Tensor] | None): The aux targets value.
+        rewards (torch.Tensor): The rewards value.
+        coefs (dict[str, float]): The coefs value.
+
+    Returns:
+        tuple[torch.Tensor, dict[str, torch.Tensor]]: The computed or requested result.
+    """
     losses = {}
     total = rewards.new_zeros(())
 
@@ -317,6 +519,16 @@ def _policy_value_from_q(
     q_values: torch.Tensor,
     valid_masks: torch.BoolTensor | None = None,
 ) -> torch.Tensor:
+    """Policy value from q for reinforcement-learning agents and training utilities.
+
+    Args:
+        logits (torch.Tensor): The logits value.
+        q_values (torch.Tensor): The q values value.
+        valid_masks (torch.BoolTensor | None): The valid masks value. Defaults to ``None``.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
+    """
     if valid_masks is not None:
         logits = apply_action_mask(logits, valid_masks)
     probs = torch.softmax(logits, dim=-1)
@@ -324,10 +536,28 @@ def _policy_value_from_q(
 
 
 def _q_taken(q_values: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+    """Q taken for reinforcement-learning agents and training utilities.
+
+    Args:
+        q_values (torch.Tensor): The q values value.
+        actions (torch.Tensor): The actions value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
+    """
     return q_values.gather(-1, actions.long().unsqueeze(-1)).squeeze(-1)
 
 
 def _next_valid_masks(valid_masks: torch.BoolTensor | None, action_dim: int) -> torch.BoolTensor | None:
+    """Next valid masks for reinforcement-learning agents and training utilities.
+
+    Args:
+        valid_masks (torch.BoolTensor | None): The valid masks value.
+        action_dim (int): The action dim value.
+
+    Returns:
+        torch.BoolTensor | None: The computed or requested result.
+    """
     if valid_masks is None:
         return None
     last_mask = torch.ones_like(valid_masks[:1])
@@ -342,9 +572,19 @@ def _hierarchical_policy_value_from_q(
     n_buckets: int,
     primary_dim: int,
 ) -> torch.Tensor:
-    """
-    Policy expectation of the same additive factored Q used by
+    """Policy expectation of the same additive factored Q used by
     ``_hierarchical_q_taken``.
+
+    Args:
+        logits (torch.Tensor): The logits value.
+        q_values (torch.Tensor): The q values value.
+        masks (dict | None): The masks value.
+        n_assets (int): The n assets value.
+        n_buckets (int): The n buckets value.
+        primary_dim (int): The primary dim value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
     """
     expected = primary_dim + 2 * n_buckets
     if logits.shape[-1] != expected or q_values.shape[-1] != expected:
@@ -387,6 +627,18 @@ def _hierarchical_q_taken(
     n_buckets: int,
     primary_dim: int,
 ) -> torch.Tensor:
+    """Hierarchical q taken for reinforcement-learning agents and training utilities.
+
+    Args:
+        q_values (torch.Tensor): The q values value.
+        actions (torch.Tensor): The actions value.
+        n_assets (int): The n assets value.
+        n_buckets (int): The n buckets value.
+        primary_dim (int): The primary dim value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
+    """
     expected = primary_dim + 2 * n_buckets
     if q_values.shape[-1] != expected:
         raise ValueError(f"Expected q_values last dim {expected}, got {q_values.shape[-1]}.")
@@ -406,11 +658,31 @@ def _hierarchical_q_taken(
 
 
 def _check_same_shape(name: str, value: torch.Tensor, ref_name: str, ref: torch.Tensor) -> None:
+    """Check same shape for reinforcement-learning agents and training utilities.
+
+    Args:
+        name (str): The name value.
+        value (torch.Tensor): The value value.
+        ref_name (str): The ref name value.
+        ref (torch.Tensor): The ref value.
+
+    Returns:
+        None: This function does not return a value.
+    """
     if value.shape != ref.shape:
         raise ValueError(f"{name}.shape={tuple(value.shape)} does not match {ref_name}.shape={tuple(ref.shape)}.")
 
 
 def _next_masks(masks: dict | None, last_next_mask: dict | None = None) -> dict | None:
+    """Next masks for reinforcement-learning agents and training utilities.
+
+    Args:
+        masks (dict | None): The masks value.
+        last_next_mask (dict | None): The last next mask value. Defaults to ``None``.
+
+    Returns:
+        dict | None: The computed or requested result.
+    """
     if masks is None:
         return None
     if last_next_mask is None:

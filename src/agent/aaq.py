@@ -1,3 +1,4 @@
+"""Aaq utilities for reinforcement-learning agents and training utilities."""
 import torch
 from torch import distributions
 
@@ -25,6 +26,15 @@ class AAQAgent(_AACAgent):
         last_next_state: torch.Tensor,
         h0: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor | None]:
+        """Compute the advantages.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor | None]: The computed or requested result.
+        """
         states, actions, rewards, dones, valid_masks = self.buffer.to_tensors(self.device, self.dtype)
         actions = actions.squeeze(-1) if actions.dim() > 1 else actions
         rewards = rewards.squeeze(-1) if rewards.dim() > 1 else rewards
@@ -67,6 +77,16 @@ class AAQAgent(_AACAgent):
         h0: dict | None = None,
         max_grad_norm: float | None = None,
     ) -> dict[str, list[float]]:
+        """Apply one update step.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+            max_grad_norm (float | None): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            dict[str, list[float]]: The computed or requested result.
+        """
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
         if len(self.buffer) == 0:

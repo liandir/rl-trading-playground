@@ -9,12 +9,28 @@ import torch
 # ---------------------------------------------------------------------------
 
 def _split_heads(t: torch.Tensor, num_heads: int, d_head: int) -> torch.Tensor:
-    """(..., L, inner_dim) -> (..., num_heads, L, d_head)"""
+    """(..., L, inner_dim) -> (..., num_heads, L, d_head)
+
+    Args:
+        t (torch.Tensor): The t value.
+        num_heads (int): The num heads value.
+        d_head (int): The d head value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
+    """
     return t.unflatten(-1, (num_heads, d_head)).transpose(-3, -2)
 
 
 def _merge_heads(t: torch.Tensor) -> torch.Tensor:
-    """(..., num_heads, L, d_head) -> (..., L, inner_dim)"""
+    """(..., num_heads, L, d_head) -> (..., L, inner_dim)
+
+    Args:
+        t (torch.Tensor): The t value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
+    """
     return t.transpose(-3, -2).flatten(-2)
 
 
@@ -28,6 +44,20 @@ def _scaled_dot_product_attention(
     attn_dropout: float,
     training: bool,
 ) -> torch.Tensor:
+    """Scaled dot product attention for neural network architectures and reusable model components.
+
+    Args:
+        q_h (torch.Tensor): The q h value.
+        k_h (torch.Tensor): The k h value.
+        v_h (torch.Tensor): The v h value.
+        scale (float): The scale value.
+        mask (torch.Tensor | None): The mask value.
+        attn_dropout (float): The attn dropout value.
+        training (bool): The training value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
+    """
     if mask is not None and mask.dim() == q_h.dim() - 1:
         mask = mask.unsqueeze(-3)
     return torch.nn.functional.scaled_dot_product_attention(
@@ -41,6 +71,15 @@ def _scaled_dot_product_attention(
 
 
 def _init_linear(linear: torch.nn.Linear, *, bias: bool) -> None:
+    """Init linear for neural network architectures and reusable model components.
+
+    Args:
+        linear (torch.nn.Linear): The linear value.
+        bias (bool): The bias value.
+
+    Returns:
+        None: This function does not return a value.
+    """
     torch.nn.init.xavier_uniform_(linear.weight)
     if bias:
         torch.nn.init.zeros_(linear.bias)
@@ -53,6 +92,17 @@ def _build_transformer_ffn(
     ff_dropout: float,
     bias: bool,
 ) -> torch.nn.Sequential:
+    """Build the transformer ffn.
+
+    Args:
+        d_model (int): The d model value.
+        ff_hidden_dim (int): The ff hidden dim value.
+        ff_dropout (float): The ff dropout value.
+        bias (bool): The bias value.
+
+    Returns:
+        torch.nn.Sequential: The computed or requested result.
+    """
     ffn = torch.nn.Sequential(
         torch.nn.Linear(d_model, ff_hidden_dim, bias=bias),
         torch.nn.GELU(),
@@ -71,9 +121,17 @@ def _build_transformer_ffn(
 # ---------------------------------------------------------------------------
 
 def _sinusoidal_pos_encoding(T: int, d: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-    """
-    Sinusoidal positional encoding, shape (T, d).
+    """Sinusoidal positional encoding, shape (T, d).
     Position 0 = oldest token, T-1 = newest token.
+
+    Args:
+        T (int): The t value.
+        d (int): The d value.
+        device (torch.device): The device value.
+        dtype (torch.dtype): The dtype value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
     """
     pos   = torch.arange(T, dtype=dtype, device=device).unsqueeze(1)   # (T, 1)
     n_sin = (d + 1) // 2
@@ -91,9 +149,16 @@ def _sinusoidal_pos_encoding(T: int, d: int, device: torch.device, dtype: torch.
 # ---------------------------------------------------------------------------
 
 def _build_causal_mask(T: int, W: int | None, device: torch.device) -> torch.Tensor:
-    """
-    Bool causal mask of shape (T, T). True = attend, False = mask out.
+    """Bool causal mask of shape (T, T). True = attend, False = mask out.
     mask[t, s] = True iff s <= t (causal) and t - s < W (window cap, when W < T).
+
+    Args:
+        T (int): The t value.
+        W (int | None): The w value.
+        device (torch.device): The device value.
+
+    Returns:
+        torch.Tensor: The computed or requested result.
     """
     idx  = torch.arange(T, device=device)
     row  = idx.unsqueeze(1)   # (T, 1)

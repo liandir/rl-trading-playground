@@ -1,3 +1,4 @@
+"""Action value utilities for neural network architectures and reusable model components."""
 import torch
 
 from src.network.core.recurrent import RecurrentNetwork, _build_recurrent_cell
@@ -20,6 +21,21 @@ class ActionValueNetwork(torch.nn.Module):
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
     ):
+        """Initialize the instance.
+
+        Args:
+            state_dim (Any): The state dim value.
+            action_dim (Any): The action dim value.
+            hidden_dims (Any): The hidden dims value. Defaults to ``None``.
+            hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
+            hidden_dims_value (Any): The hidden dims value value. Defaults to ``None``.
+            activation (Any): The activation value. Defaults to ``torch.tanh``.
+            recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
+            recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         hidden_dims = hidden_dims or []
         hidden_dims_actor = hidden_dims_actor or []
@@ -55,6 +71,14 @@ class ActionValueNetwork(torch.nn.Module):
         )
 
     def reset(self, batch_size: int = 1):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
         for layer in self.layers:
@@ -63,6 +87,14 @@ class ActionValueNetwork(torch.nn.Module):
         self.value.reset(batch_size, device=device, dtype=dtype)
 
     def forward(self, x):
+        """Compute the forward pass.
+
+        Args:
+            x (Any): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         z = x.reshape(-1, self.state_dim)
         for layer in self.layers:
             z = layer(z)
@@ -71,6 +103,14 @@ class ActionValueNetwork(torch.nn.Module):
         return logits, values
 
     def forward_seq(self, x_seq):
+        """Compute a forward pass over a sequence.
+
+        Args:
+            x_seq (Any): The x seq value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         z_seq = x_seq
         for layer in self.layers:
             z_seq = layer.forward_seq(z_seq)
@@ -79,12 +119,32 @@ class ActionValueNetwork(torch.nn.Module):
         return logits, values
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        """Return a snapshot of recurrent states.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         trunk = [cell.get_state(clone=clone, detach=detach) for cell in self.layers]
         actor = self.actor.get_states(clone=clone, detach=detach)
         value = self.value.get_states(clone=clone, detach=detach)
         return {"trunk": trunk, "actor": actor, "v": value}
 
     def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+        """Restore recurrent states from a snapshot.
+
+        Args:
+            states (dict): The states value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if strict:
             for key in ("trunk", "actor", "v"):
                 if key not in states:

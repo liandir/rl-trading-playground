@@ -1,3 +1,4 @@
+"""Package exports for src.kraken, covering Kraken market data and exchange integration helpers."""
 from .feed import KrakenLiveFeed
 from .models import BookSnapshot, MarketFrame, PairSnapshot, TickerSnapshot, TradeEvent
 from .resample import IntervalAggregator

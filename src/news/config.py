@@ -1,3 +1,4 @@
+"""Config utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 import json
@@ -32,6 +33,7 @@ class SourceSpec:
 
 @dataclass(slots=True)
 class NewsConfig:
+    """NewsConfig configuration object for news collection, tagging, deduplication, and storage utilities."""
     data_dir: Path
     aliases: dict[str, list[str]]
     sources: list[SourceSpec]
@@ -42,13 +44,31 @@ class NewsConfig:
 
     @property
     def asset_universe(self) -> list[str]:
+        """Asset universe for NewsConfig.
+
+        Returns:
+            list[str]: The computed or requested result.
+        """
         return list(self.aliases.keys())
 
     def enabled_sources(self) -> list[SourceSpec]:
+        """Enabled sources for NewsConfig.
+
+        Returns:
+            list[SourceSpec]: The computed or requested result.
+        """
         return [s for s in self.sources if s.enabled]
 
 
 def _load_aliases(path: Path) -> dict[str, list[str]]:
+    """Load the aliases.
+
+    Args:
+        path (Path): The path value.
+
+    Returns:
+        dict[str, list[str]]: The computed or requested result.
+    """
     raw = json.loads(path.read_text())
     return {sym.upper(): list(a) for sym, a in raw.items()}
 
@@ -70,6 +90,12 @@ def load_config(path: str | os.PathLike[str]) -> NewsConfig:
         kind = "cryptopanic"
         credibility = 0.6
         options = { api_key_env = "CRYPTOPANIC_API_KEY", filter = "hot" }
+
+    Args:
+        path (str | os.PathLike[str]): The path value.
+
+    Returns:
+        NewsConfig: The computed or requested result.
     """
 
     if tomllib is None:  # pragma: no cover

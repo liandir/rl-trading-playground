@@ -1,3 +1,4 @@
+"""Ppo utilities for reinforcement-learning agents and training utilities."""
 import torch
 from torch import distributions
 
@@ -31,10 +32,20 @@ UPDATE_METRIC_NAMES = (
 
 
 def _empty_update_metrics() -> dict[str, list[float]]:
+    """Empty update metrics for reinforcement-learning agents and training utilities.
+
+    Returns:
+        dict[str, list[float]]: The computed or requested result.
+    """
     return {name: [0.0] for name in UPDATE_METRIC_NAMES}
 
 
 def _init_update_metrics() -> dict[str, list[float]]:
+    """Init update metrics for reinforcement-learning agents and training utilities.
+
+    Returns:
+        dict[str, list[float]]: The computed or requested result.
+    """
     return {name: [] for name in UPDATE_METRIC_NAMES}
 
 
@@ -53,6 +64,25 @@ def _append_update_metrics(
     entropy: torch.Tensor,
     loss: torch.Tensor,
 ):
+    """Append update metrics for reinforcement-learning agents and training utilities.
+
+    Args:
+        metric_store (dict[str, list[float]]): The metric store value.
+        logits (torch.Tensor): The logits value.
+        new_log_probs (torch.Tensor): The new log probs value.
+        values (torch.Tensor): The values value.
+        returns (torch.Tensor): The returns value.
+        raw_advantages (torch.Tensor): The raw advantages value.
+        ratios (torch.Tensor): The ratios value.
+        eps_clip (float): The eps clip value.
+        actor_loss (torch.Tensor): The actor loss value.
+        critic_loss (torch.Tensor): The critic loss value.
+        entropy (torch.Tensor): The entropy value.
+        loss (torch.Tensor): The loss value.
+
+    Returns:
+        None: This function does not return a value.
+    """
     probs          = torch.softmax(logits.detach(), dim=-1)
     ratios_d       = ratios.detach()
     values_d       = values.detach()
@@ -83,10 +113,21 @@ def _append_update_metrics(
 # ---------------------------------------------------------------------------
 
 class RolloutBuffer:
+    """RolloutBuffer buffer for reinforcement-learning agents and training utilities."""
     def __init__(self):
+        """Initialize the instance.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.clear()
 
     def clear(self):
+        """Clear buffered state.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states      = []
         self.actions     = []
         self.log_probs   = []
@@ -95,6 +136,19 @@ class RolloutBuffer:
         self.valid_masks = []
 
     def store(self, state, action, log_prob, reward, done, valid_mask=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            log_prob (Any): The log prob value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            valid_mask (Any): The valid mask value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states.append(state)
         self.actions.append(action)
         self.log_probs.append(log_prob)
@@ -103,9 +157,23 @@ class RolloutBuffer:
         self.valid_masks.append(valid_mask)
 
     def __len__(self):
+        """Return the number of contained items.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return len(self.states)
 
     def to_tensors(self, device, dtype):
+        """Convert buffered values to tensors.
+
+        Args:
+            device (Any): The device value.
+            dtype (Any): The dtype value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         states    = torch.stack(self.states).to(device=device, dtype=dtype)
         actions   = torch.stack(self.actions).to(device=device, dtype=dtype)
         log_probs = torch.stack(self.log_probs).to(device=device, dtype=dtype)
@@ -152,6 +220,31 @@ class PPOAgent:
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
     ):
+        """Initialize the instance.
+
+        Args:
+            network (dict | None): The network value. Defaults to ``None``.
+            state_dim (int | None): The state dim value. Defaults to ``None``.
+            action_dim (int | None): The action dim value. Defaults to ``None``.
+            gamma (float): The gamma value. Defaults to ``0.999``.
+            eps_clip (float): The eps clip value. Defaults to ``0.2``.
+            vf_coef (float): The vf coef value. Defaults to ``0.5``.
+            ent_coef (float): The ent coef value. Defaults to ``0.01``.
+            normalize_advantages (bool): The normalize advantages value. Defaults to ``True``.
+            advantage_type (str): The advantage type value. Defaults to ``'gae'``.
+            gae_lambda (float): The gae lambda value. Defaults to ``0.95``.
+            hidden_dims (list[int]): The hidden dims value. Defaults to ``None``.
+            hidden_dims_actor (list[int]): The hidden dims actor value. Defaults to ``None``.
+            hidden_dims_value (list[int]): The hidden dims value value. Defaults to ``None``.
+            activation (callable): The activation value. Defaults to ``torch.tanh``.
+            recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
+            recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            device (str): The device value. Defaults to ``'cpu'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if advantage_type not in ("td0", "gae"):
             raise ValueError(f"advantage_type must be 'td0' or 'gae', got '{advantage_type}'.")
         self.gamma                = gamma
@@ -185,6 +278,14 @@ class PPOAgent:
         self.net.reset(1)
 
     def infer_logits(self, state: torch.Tensor) -> torch.Tensor:
+        """Infer logits for PPOAgent.
+
+        Args:
+            state (torch.Tensor): The state value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         logits, _ = self.net(state)
         return logits
 
@@ -193,6 +294,15 @@ class PPOAgent:
         state_seq: torch.Tensor,
         h0: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Infer from seq for PPOAgent.
+
+        Args:
+            state_seq (torch.Tensor): The state seq value.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         if h0 is not None:
             self.net.set_states(h0, strict=False)
         return self.net.forward_seq(state_seq)
@@ -204,6 +314,17 @@ class PPOAgent:
         explore: bool = False,
         grad_enabled: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Act for PPOAgent.
+
+        Args:
+            state (torch.Tensor): The state value.
+            valid_mask (torch.BoolTensor | None): The valid mask value. Defaults to ``None``.
+            explore (bool): The explore value. Defaults to ``False``.
+            grad_enabled (bool): The grad enabled value. Defaults to ``False``.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         with torch.set_grad_enabled(grad_enabled):
             state  = state.to(dtype=self.dtype, device=self.device)
             logits = self.infer_logits(state)
@@ -220,9 +341,31 @@ class PPOAgent:
         return action.cpu(), log_prob.cpu()
 
     def store(self, state, action, log_prob, reward, done, valid_mask=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            log_prob (Any): The log prob value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            valid_mask (Any): The valid mask value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.buffer.store(state, action, log_prob, reward, done, valid_mask=valid_mask)
 
     def init_optimizer(self, lr, optim="AdamW"):
+        """Init optimizer for PPOAgent.
+
+        Args:
+            lr (Any): The lr value.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         opt_cls    = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
@@ -231,6 +374,15 @@ class PPOAgent:
         last_next_state: torch.Tensor,
         h0: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor | None]:
+        """Compute the advantages.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor | None]: The computed or requested result.
+        """
         states, actions, old_log_probs, rewards, dones, valid_masks = self.buffer.to_tensors(self.device, self.dtype)
         actions       = actions.squeeze(-1)       if actions.dim()       > 1 else actions
         rewards       = rewards.squeeze(-1)       if rewards.dim()       > 1 else rewards
@@ -267,6 +419,17 @@ class PPOAgent:
         h0: dict | None = None,
         max_grad_norm: float | None = None,
     ) -> dict[str, list[float]]:
+        """Apply one update step.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            k_epochs (int): The k epochs value. Defaults to ``4``.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+            max_grad_norm (float | None): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            dict[str, list[float]]: The computed or requested result.
+        """
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
         if len(self.buffer) == 0:
@@ -323,9 +486,26 @@ class PPOAgent:
         return metrics
 
     def save(self, path: str):
+        """Save for PPOAgent.
+
+        Args:
+            path (str): The path value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         torch.save({"network": self.net.state_dict()}, path)
 
     def load(self, path: str, strict: bool = True):
+        """Load for PPOAgent.
+
+        Args:
+            path (str): The path value.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         ckpt = torch.load(path, map_location=self.device)
         self.net.load_state_dict(ckpt["network"], strict=strict)
 
@@ -345,6 +525,26 @@ class PPOAgent:
         store_results=True,
         max_grad_norm=None,
     ):
+        """Train on historical for PPOAgent.
+
+        Args:
+            env (Any): The env value.
+            data (Any): The data value.
+            n_episodes (Any): The n episodes value.
+            max_steps (Any): The max steps value. Defaults to ``2000``.
+            warm_up (Any): The warm up value. Defaults to ``0``.
+            update_interval (Any): The update interval value. Defaults to ``100``.
+            n_updates (Any): The n updates value. Defaults to ``4``.
+            burn_in_updates (Any): The burn in updates value. Defaults to ``0``.
+            lr (Any): The lr value. Defaults to ``0.0003``.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
+            store_results (Any): The store results value. Defaults to ``True``.
+            max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
@@ -456,8 +656,7 @@ class PPOAgent:
         store_results=True,
         max_grad_norm=None,
     ):
-        """
-        Train on a BatchedMultiCurrencyEnv using pre-stacked tensor data.
+        """Train on a BatchedMultiCurrencyEnv using pre-stacked tensor data.
 
         close, high, low, volume, open_ : (T, N) float tensors
         times                           : (T,)  float64 tensor of Unix timestamps
@@ -472,6 +671,29 @@ class PPOAgent:
         the shared recurrent state can stabilise before training begins.
 
         Returns (total_loss, total_reward).
+
+        Args:
+            bat_env (Any): The bat env value.
+            open_ (Any): The open value.
+            close (Any): The close value.
+            high (Any): The high value.
+            low (Any): The low value.
+            volume (Any): The volume value.
+            times (Any): The times value.
+            n_episodes (Any): The n episodes value.
+            max_steps (Any): The max steps value. Defaults to ``2000``.
+            warm_up (Any): The warm up value. Defaults to ``0``.
+            update_interval (Any): The update interval value. Defaults to ``100``.
+            n_updates (Any): The n updates value. Defaults to ``4``.
+            burn_in_updates (Any): The burn in updates value. Defaults to ``1``.
+            lr (Any): The lr value. Defaults to ``0.0003``.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
+            store_results (Any): The store results value. Defaults to ``True``.
+            max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
         """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)

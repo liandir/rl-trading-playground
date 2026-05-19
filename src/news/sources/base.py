@@ -1,3 +1,4 @@
+"""Base utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -19,19 +20,51 @@ class NewsSource(ABC):
     credibility: float
 
     def __init__(self, *, name: str, credibility: float, asset_universe: list[str]) -> None:
+        """Initialize the instance.
+
+        Args:
+            name (str): The name value.
+            credibility (float): The credibility value.
+            asset_universe (list[str]): The asset universe value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.name = name
         self.credibility = float(credibility)
         self.asset_universe = list(asset_universe)
 
     @abstractmethod
     def fetch(self, since: datetime, until: datetime) -> Iterator[RawArticle]:
+        """Fetch items from the configured source.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         ...
 
     # Optional hook: per-source resumable cursor. The collector passes
     # the dict from :meth:`JsonlStore.get_state` in and stores whatever
     # the source returns. Default is no-op.
     def load_state(self, state: dict) -> None:  # pragma: no cover
+        """Load persisted source state.
+
+        Args:
+            state (dict): The state value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         return None
 
     def dump_state(self) -> dict:  # pragma: no cover
+        """Return persisted source state.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         return {}

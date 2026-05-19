@@ -1,3 +1,4 @@
+"""Ppo hierarchical aux utilities for reinforcement-learning agents and training utilities."""
 import torch
 
 from src.agent.aac_hierarchical_aux import AuxiliaryHierarchicalRolloutBuffer
@@ -18,14 +19,42 @@ class AuxiliaryHierarchicalPPORolloutBuffer(AuxiliaryHierarchicalRolloutBuffer):
     """Auxiliary hierarchical PPO buffer with old log-probs."""
 
     def clear(self):
+        """Clear buffered state.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().clear()
         self.log_probs = []
 
     def store(self, state, action, log_prob, reward, done, mask=None, aux_target=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            log_prob (Any): The log prob value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            mask (Any): The mask value. Defaults to ``None``.
+            aux_target (Any): The aux target value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().store(state, action, reward, done, mask=mask, aux_target=aux_target)
         self.log_probs.append(log_prob)
 
     def to_tensors(self, device, dtype):
+        """Convert buffered values to tensors.
+
+        Args:
+            device (Any): The device value.
+            dtype (Any): The dtype value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         states, actions, rewards, dones, masks, aux_targets = super().to_tensors(device, dtype)
         log_probs = torch.stack(self.log_probs).to(device=device, dtype=dtype)
         return states, actions, log_probs, rewards, dones, masks, aux_targets
@@ -41,6 +70,17 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
         aux_loss_coefs: dict[str, float] | None = None,
         **kwargs,
     ):
+        """Initialize the instance.
+
+        Args:
+            *args (Any): The args value.
+            aux_coef (float): The aux coef value. Defaults to ``0.05``.
+            aux_loss_coefs (dict[str, float] | None): The aux loss coefs value. Defaults to ``None``.
+            **kwargs (Any): The kwargs value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(*args, **kwargs)
         self.aux_coef = aux_coef
         self.aux_loss_coefs = dict(aux_loss_coefs or {"reward": 1.0, "asset_ret": 0.5, "asset_vol": 0.25})
@@ -48,6 +88,17 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
         self.buffer = AuxiliaryHierarchicalPPORolloutBuffer()
 
     def act(self, state: torch.Tensor, mask: dict | None = None, explore: bool = False, grad_enabled: bool = False):
+        """Act for HierarchicalAuxPPOAgent.
+
+        Args:
+            state (torch.Tensor): The state value.
+            mask (dict | None): The mask value. Defaults to ``None``.
+            explore (bool): The explore value. Defaults to ``False``.
+            grad_enabled (bool): The grad enabled value. Defaults to ``False``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         with torch.set_grad_enabled(grad_enabled):
             state = state.to(dtype=self.dtype, device=self.device)
             logits, _, _ = _unpack_policy_value_aux(self.net(state))
@@ -59,14 +110,46 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
         return action.cpu(), log_prob.cpu()
 
     def infer_from_seq(self, state_seq, h0=None):
+        """Infer from seq for HierarchicalAuxPPOAgent.
+
+        Args:
+            state_seq (Any): The state seq value.
+            h0 (Any): The h0 value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if h0 is not None:
             self.net.set_states(h0, strict=False)
         return self.net.forward_seq(state_seq)
 
     def store(self, state, action, log_prob, reward, done, mask=None, aux_target=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            log_prob (Any): The log prob value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            mask (Any): The mask value. Defaults to ``None``.
+            aux_target (Any): The aux target value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.buffer.store(state, action, log_prob, reward, done, mask=mask, aux_target=aux_target)
 
     def compute_advantages(self, last_next_state: torch.Tensor, h0=None):
+        """Compute the advantages.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (Any): The h0 value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         states, actions, old_log_probs, rewards, dones, masks, aux_targets = self.buffer.to_tensors(self.device, self.dtype)
         rewards = rewards.squeeze(-1) if rewards.dim() > actions.dim() - 1 else rewards
         dones = dones.squeeze(-1) if dones.dim() > actions.dim() - 1 else dones
@@ -93,6 +176,17 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
         return advantages, raw_adv, returns, states, actions, old_log_probs, rewards, masks, aux_targets
 
     def update(self, last_next_state: torch.Tensor, k_epochs: int = 4, h0=None, max_grad_norm: float | None = None):
+        """Apply one update step.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            k_epochs (int): The k epochs value. Defaults to ``4``.
+            h0 (Any): The h0 value. Defaults to ``None``.
+            max_grad_norm (float | None): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
         if len(self.buffer) == 0:
@@ -155,6 +249,31 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
         store_results=True,
         max_grad_norm=None,
     ):
+        """Train on historical bat for HierarchicalAuxPPOAgent.
+
+        Args:
+            bat_env (Any): The bat env value.
+            open_ (Any): The open value.
+            close (Any): The close value.
+            high (Any): The high value.
+            low (Any): The low value.
+            volume (Any): The volume value.
+            times (Any): The times value.
+            n_episodes (Any): The n episodes value.
+            max_steps (Any): The max steps value. Defaults to ``2000``.
+            warm_up (Any): The warm up value. Defaults to ``0``.
+            update_interval (Any): The update interval value. Defaults to ``100``.
+            n_updates (Any): The n updates value. Defaults to ``4``.
+            burn_in_updates (Any): The burn in updates value. Defaults to ``1``.
+            lr (Any): The lr value. Defaults to ``0.0003``.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
+            store_results (Any): The store results value. Defaults to ``True``.
+            max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 

@@ -15,7 +15,17 @@ from typing import Any
 
 
 class HttpError(RuntimeError):
+    """HttpError exception type for news collection, tagging, deduplication, and storage utilities."""
     def __init__(self, status: int, message: str) -> None:
+        """Initialize the instance.
+
+        Args:
+            status (int): The status value.
+            message (str): The message value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(f"HTTP {status}: {message}")
         self.status = status
 
@@ -30,6 +40,20 @@ def get_json(
     backoff: float = 1.5,
     user_agent: str = "news-collector/0.1",
 ) -> Any:
+    """Return the json.
+
+    Args:
+        url (str): The url value.
+        params (dict[str, Any] | None): The params value. Defaults to ``None``.
+        headers (dict[str, str] | None): The headers value. Defaults to ``None``.
+        timeout (float): The timeout value. Defaults to ``15.0``.
+        retries (int): The retries value. Defaults to ``3``.
+        backoff (float): The backoff value. Defaults to ``1.5``.
+        user_agent (str): The user agent value. Defaults to ``'news-collector/0.1'``.
+
+    Returns:
+        Any: The computed or requested result.
+    """
     if params:
         query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
         sep = "&" if "?" in url else "?"

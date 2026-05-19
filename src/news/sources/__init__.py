@@ -1,3 +1,4 @@
+"""Package exports for src.news.sources, covering news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 from typing import Any
@@ -11,6 +12,13 @@ def build_source(spec: SourceSpec, asset_universe: list[str]) -> NewsSource:
 
     Lazily imports the backend module so optional dependencies (praw,
     feedparser, tweepy, ...) are only required when actually enabled.
+
+    Args:
+        spec (SourceSpec): The spec value.
+        asset_universe (list[str]): The asset universe value.
+
+    Returns:
+        NewsSource: The computed or requested result.
     """
 
     opts: dict[str, Any] = dict(spec.options)

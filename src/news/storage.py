@@ -1,3 +1,4 @@
+"""Storage utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 import json
@@ -27,6 +28,14 @@ class JsonlStore:
     """
 
     def __init__(self, root: str | os.PathLike[str]) -> None:
+        """Initialize the instance.
+
+        Args:
+            root (str | os.PathLike[str]): The root value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.root = Path(root)
         (self.root / "articles").mkdir(parents=True, exist_ok=True)
         (self.root / "raw").mkdir(parents=True, exist_ok=True)
@@ -37,6 +46,11 @@ class JsonlStore:
     # ---- ids ----------------------------------------------------------------
 
     def _load_index(self) -> set[str]:
+        """Load the index.
+
+        Returns:
+            set[str]: The computed or requested result.
+        """
         if self._known_ids is not None:
             return self._known_ids
         ids: set[str] = set()
@@ -51,24 +65,57 @@ class JsonlStore:
         return ids
 
     def has(self, article_id: str) -> bool:
+        """Has for JsonlStore.
+
+        Args:
+            article_id (str): The article id value.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         return article_id in self._load_index()
 
     # ---- writes -------------------------------------------------------------
 
     def _articles_path(self, source: str, ts: datetime) -> Path:
+        """Articles path for JsonlStore.
+
+        Args:
+            source (str): The source value.
+            ts (datetime): The ts value.
+
+        Returns:
+            Path: The computed or requested result.
+        """
         day = ts.astimezone(timezone.utc).strftime("%Y-%m-%d")
         p = self.root / "articles" / source / f"{day}.jsonl"
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
     def _raw_path(self, source: str, ts: datetime) -> Path:
+        """Raw path for JsonlStore.
+
+        Args:
+            source (str): The source value.
+            ts (datetime): The ts value.
+
+        Returns:
+            Path: The computed or requested result.
+        """
         day = ts.astimezone(timezone.utc).strftime("%Y-%m-%d")
         p = self.root / "raw" / source / f"{day}.jsonl"
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
     def write(self, article: Article) -> bool:
-        """Append an article. Returns ``False`` if already present."""
+        """Append an article. Returns ``False`` if already present.
+
+        Args:
+            article (Article): The article value.
+
+        Returns:
+            bool: The computed or requested result.
+        """
 
         if self.has(article.id):
             return False
@@ -82,6 +129,16 @@ class JsonlStore:
         return True
 
     def write_raw(self, source: str, ts: datetime, payload: dict[str, Any]) -> int:
+        """Write raw for JsonlStore.
+
+        Args:
+            source (str): The source value.
+            ts (datetime): The ts value.
+            payload (dict[str, Any]): The payload value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         path = self._raw_path(source, ts)
         with path.open("a", encoding="utf-8") as fh:
             offset = fh.tell()
@@ -91,12 +148,29 @@ class JsonlStore:
     # ---- state --------------------------------------------------------------
 
     def get_state(self, source: str) -> dict[str, Any]:
+        """Return the current state snapshot.
+
+        Args:
+            source (str): The source value.
+
+        Returns:
+            dict[str, Any]: The computed or requested result.
+        """
         p = self.root / "state" / f"{source}.json"
         if not p.exists():
             return {}
         return json.loads(p.read_text())
 
     def set_state(self, source: str, state: dict[str, Any]) -> None:
+        """Restore the current state snapshot.
+
+        Args:
+            source (str): The source value.
+            state (dict[str, Any]): The state value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         p = self.root / "state" / f"{source}.json"
         fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=str(p.parent))
         try:
@@ -118,6 +192,17 @@ class JsonlStore:
         sources: Iterable[str] | None = None,
         assets: Iterable[str] | None = None,
     ) -> Iterator[Article]:
+        """Iterate over articles.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+            sources (Iterable[str] | None): The sources value. Defaults to ``None``.
+            assets (Iterable[str] | None): The assets value. Defaults to ``None``.
+
+        Returns:
+            Iterator[Article]: The computed or requested result.
+        """
         asset_filter = {a.upper() for a in assets} if assets else None
         src_dir = self.root / "articles"
         sources_to_scan: list[str]
@@ -146,6 +231,11 @@ class JsonlStore:
     # ---- maintenance --------------------------------------------------------
 
     def rebuild_index(self) -> int:
+        """Rebuild index for JsonlStore.
+
+        Returns:
+            int: The computed or requested result.
+        """
         ids: list[str] = []
         articles_dir = self.root / "articles"
         if articles_dir.exists():
@@ -166,12 +256,30 @@ class JsonlStore:
 
 
 def _parse_iso(ts: str) -> datetime:
+    """Parse the iso.
+
+    Args:
+        ts (str): The ts value.
+
+    Returns:
+        datetime: The computed or requested result.
+    """
     if ts.endswith("Z"):
         ts = ts[:-1] + "+00:00"
     return datetime.fromisoformat(ts)
 
 
 def _iter_day_files(root: Path, since: date, until: date) -> Iterator[Path]:
+    """Iterate over day files.
+
+    Args:
+        root (Path): The root value.
+        since (date): The since value.
+        until (date): The until value.
+
+    Returns:
+        Iterator[Path]: The computed or requested result.
+    """
     if not root.exists():
         return
     d = since

@@ -1,3 +1,4 @@
+"""Visualize utilities for evaluation and visualization helpers."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -18,19 +19,17 @@ def visualize_ohlcv(
     height: int = 600,
     show_plot: bool = False,
 ):
-    """
-    Create an interactive Bokeh candlestick chart with a volume subplot.
+    """Create an interactive Bokeh candlestick chart with a volume subplot.
 
     Args:
-        data: OHLCV data as a list of row dictionaries, a dict of columns, or a
-            pandas-like DataFrame with time/open/high/low/close/volume columns.
-        title: Plot title.
-        width: Plot width in pixels.
-        height: Total layout height in pixels.
-        show_plot: If True, call ``bokeh.plotting.show`` before returning.
+        data (Sequence[Mapping[str, Any]] | Mapping[str, Sequence[Any]]): The data value.
+        title (str): The title value. Defaults to ``'OHLCV'``.
+        width (int): The width value. Defaults to ``1000``.
+        height (int): The height value. Defaults to ``600``.
+        show_plot (bool): The show plot value. Defaults to ``False``.
 
     Returns:
-        A Bokeh layout containing the price and volume figures.
+        Any: The computed or requested result.
     """
     source = ColumnDataSource(_to_column_data(data))
 
@@ -108,6 +107,14 @@ def visualize_ohlcv(
 def _to_column_data(
     data: Sequence[Mapping[str, Any]] | Mapping[str, Sequence[Any]],
 ) -> dict[str, list[Any]]:
+    """Convert the value to column data.
+
+    Args:
+        data (Sequence[Mapping[str, Any]] | Mapping[str, Sequence[Any]]): The data value.
+
+    Returns:
+        dict[str, list[Any]]: The computed or requested result.
+    """
     if hasattr(data, "to_dict"):
         columns = data.to_dict(orient="list")
     elif isinstance(data, Mapping):
@@ -138,6 +145,14 @@ def _to_column_data(
 
 
 def _rows_to_columns(rows: Iterable[Mapping[str, Any]]) -> dict[str, list[Any]]:
+    """Rows to columns for evaluation and visualization helpers.
+
+    Args:
+        rows (Iterable[Mapping[str, Any]]): The rows value.
+
+    Returns:
+        dict[str, list[Any]]: The computed or requested result.
+    """
     columns = {column: [] for column in OHLCV_COLUMNS}
     for row in rows:
         for column in OHLCV_COLUMNS:
@@ -146,6 +161,14 @@ def _rows_to_columns(rows: Iterable[Mapping[str, Any]]) -> dict[str, list[Any]]:
 
 
 def _infer_candle_width_ms(times: Sequence[Any]) -> int:
+    """Infer candle width ms for evaluation and visualization helpers.
+
+    Args:
+        times (Sequence[Any]): The times value.
+
+    Returns:
+        int: The computed or requested result.
+    """
     if len(times) < 2:
         return 60_000
 
@@ -163,12 +186,28 @@ def _infer_candle_width_ms(times: Sequence[Any]) -> int:
 
 
 def _time_to_ms(value: Any) -> float:
+    """Time to ms for evaluation and visualization helpers.
+
+    Args:
+        value (Any): The value value.
+
+    Returns:
+        float: The computed or requested result.
+    """
     if isinstance(value, datetime):
         return value.timestamp() * 1000
     return float(value)
 
 
 def _style_time_axis(plot) -> None:
+    """Style time axis for evaluation and visualization helpers.
+
+    Args:
+        plot (Any): The plot value.
+
+    Returns:
+        None: This function does not return a value.
+    """
     plot.xaxis.formatter = DatetimeTickFormatter(
         seconds="%H:%M:%S",
         minsec="%H:%M:%S",

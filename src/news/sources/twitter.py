@@ -1,3 +1,4 @@
+"""Twitter utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -35,6 +36,21 @@ class TwitterSource(NewsSource):
         cashtags: bool = True,
         max_results_per_query: int = 100,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            name (str): The name value.
+            credibility (float): The credibility value.
+            asset_universe (list[str]): The asset universe value.
+            backend (str): The backend value. Defaults to ``'tweepy_v2'``.
+            accounts (list[str] | None): The accounts value. Defaults to ``None``.
+            aliases (dict[str, list[str]] | None): The aliases value. Defaults to ``None``.
+            cashtags (bool): The cashtags value. Defaults to ``True``.
+            max_results_per_query (int): The max results per query value. Defaults to ``100``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(name=name, credibility=credibility, asset_universe=asset_universe)
         self.backend = backend
         self.accounts = list(accounts or [])
@@ -43,6 +59,15 @@ class TwitterSource(NewsSource):
         self.max_results_per_query = int(max_results_per_query)
 
     def fetch(self, since: datetime, until: datetime) -> Iterator[RawArticle]:
+        """Fetch items from the configured source.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         if self.backend == "tweepy_v2":
             return self._fetch_tweepy(since, until)
         if self.backend == "snscrape":
@@ -52,6 +77,11 @@ class TwitterSource(NewsSource):
         raise ValueError(f"unknown twitter backend: {self.backend!r}")
 
     def _build_queries(self) -> list[tuple[str, list[str]]]:
+        """Build the queries.
+
+        Returns:
+            list[tuple[str, list[str]]]: The computed or requested result.
+        """
         queries: list[tuple[str, list[str]]] = []
         for symbol in self.asset_universe:
             aliases = self.aliases.get(symbol.upper(), [symbol])
@@ -69,10 +99,37 @@ class TwitterSource(NewsSource):
     # credential/cost trade-off is decided.
 
     def _fetch_tweepy(self, since: datetime, until: datetime) -> Iterator[RawArticle]:  # pragma: no cover
+        """Fetch tweepy for TwitterSource.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         raise NotImplementedError("tweepy_v2 backend not wired yet — needs TWITTER_BEARER_TOKEN")
 
     def _fetch_snscrape(self, since: datetime, until: datetime) -> Iterator[RawArticle]:  # pragma: no cover
+        """Fetch snscrape for TwitterSource.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         raise NotImplementedError("snscrape backend not wired yet")
 
     def _fetch_lunarcrush(self, since: datetime, until: datetime) -> Iterator[RawArticle]:  # pragma: no cover
+        """Fetch lunarcrush for TwitterSource.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         raise NotImplementedError("lunarcrush backend not wired yet — needs LUNARCRUSH_API_KEY")

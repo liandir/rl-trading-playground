@@ -1,3 +1,4 @@
+"""Reddit utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 import os
@@ -42,6 +43,24 @@ class RedditSource(NewsSource):
         client_secret_env: str = "REDDIT_CLIENT_SECRET",
         user_agent_env: str = "REDDIT_USER_AGENT",
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            name (str): The name value.
+            credibility (float): The credibility value.
+            asset_universe (list[str]): The asset universe value.
+            subreddits (list[str]): The subreddits value.
+            aliases (dict[str, list[str]] | None): The aliases value. Defaults to ``None``.
+            mode (str): The mode value. Defaults to ``'new'``.
+            limit (int): The limit value. Defaults to ``500``.
+            include_comments_top_n (int): The include comments top n value. Defaults to ``0``.
+            client_id_env (str): The client id env value. Defaults to ``'REDDIT_CLIENT_ID'``.
+            client_secret_env (str): The client secret env value. Defaults to ``'REDDIT_CLIENT_SECRET'``.
+            user_agent_env (str): The user agent env value. Defaults to ``'REDDIT_USER_AGENT'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(name=name, credibility=credibility, asset_universe=asset_universe)
         self.subreddits = list(subreddits)
         self.aliases = aliases or {}
@@ -53,6 +72,11 @@ class RedditSource(NewsSource):
         self._user_agent = os.getenv(user_agent_env, "news-collector/0.1")
 
     def _client(self):  # pragma: no cover - thin wrapper
+        """Client for RedditSource.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         try:
             import praw  # type: ignore[import-not-found]
         except ModuleNotFoundError as e:
@@ -69,6 +93,15 @@ class RedditSource(NewsSource):
         )
 
     def fetch(self, since: datetime, until: datetime) -> Iterator[RawArticle]:
+        """Fetch items from the configured source.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         reddit = self._client()
         since_u = since.astimezone(timezone.utc)
         until_u = until.astimezone(timezone.utc)
@@ -86,6 +119,16 @@ class RedditSource(NewsSource):
             raise ValueError(f"unknown reddit mode: {self.mode!r}")
 
     def _post_to_raw(self, post, subreddit_name: str, pre_tagged: list[str] | None = None) -> RawArticle:
+        """Post to raw for RedditSource.
+
+        Args:
+            post (Any): The post value.
+            subreddit_name (str): The subreddit name value.
+            pre_tagged (list[str] | None): The pre tagged value. Defaults to ``None``.
+
+        Returns:
+            RawArticle: The computed or requested result.
+        """
         ts = datetime.fromtimestamp(post.created_utc, tz=timezone.utc)
         body = post.selftext or None
         if self.include_comments_top_n > 0:
@@ -110,6 +153,17 @@ class RedditSource(NewsSource):
         )
 
     def _iter_listing(self, reddit, sub: str, since_u: datetime, until_u: datetime) -> Iterator[RawArticle]:
+        """Iterate over listing.
+
+        Args:
+            reddit (Any): The reddit value.
+            sub (str): The sub value.
+            since_u (datetime): The since u value.
+            until_u (datetime): The until u value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         for post in reddit.subreddit(sub).new(limit=self.limit):
             ts = datetime.fromtimestamp(post.created_utc, tz=timezone.utc)
             if ts < since_u:
@@ -127,6 +181,19 @@ class RedditSource(NewsSource):
         since_u: datetime,
         until_u: datetime,
     ) -> Iterator[RawArticle]:
+        """Iterate over search.
+
+        Args:
+            reddit (Any): The reddit value.
+            sub (str): The sub value.
+            query (str): The query value.
+            symbol (str): The symbol value.
+            since_u (datetime): The since u value.
+            until_u (datetime): The until u value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         for post in reddit.subreddit(sub).search(query, sort="new", time_filter="all", limit=self.limit):
             ts = datetime.fromtimestamp(post.created_utc, tz=timezone.utc)
             if ts < since_u or ts > until_u:

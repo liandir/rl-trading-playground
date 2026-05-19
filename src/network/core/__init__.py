@@ -1,3 +1,4 @@
+"""Package exports for src.network.core, covering neural network architectures and reusable model components."""
 from src.network.core.attention import (
     ResidualCrossAttentionBlock,
     ResidualSelfAttentionBlock,

@@ -10,6 +10,15 @@ DEPTH = 10
 
 
 async def stream(pair_like: str, depth: int = 10) -> None:
+    """Stream live ticker and book updates for one pair.
+
+    Args:
+        pair_like (str): Pair symbol or code to stream.
+        depth (int): Order book depth to subscribe to. Defaults to ``10``.
+
+    Returns:
+        None: This coroutine does not return a value.
+    """
     async with KrakenLiveFeed([pair_like], depth=depth) as feed:
         await feed.wait_until_ready(timeout=30.0)
         print(f"Streaming {feed.pairs[0]} (depth={depth}). CTRL+C to stop.\n")

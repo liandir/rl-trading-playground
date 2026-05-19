@@ -1,3 +1,4 @@
+"""Aac utilities for reinforcement-learning agents and training utilities."""
 import torch
 from torch import distributions
 
@@ -21,10 +22,21 @@ from src.agent.utils import (
 # ---------------------------------------------------------------------------
 
 class RolloutBuffer:
+    """RolloutBuffer buffer for reinforcement-learning agents and training utilities."""
     def __init__(self):
+        """Initialize the instance.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.clear()
 
     def clear(self):
+        """Clear buffered state.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states      = []
         self.actions     = []
         self.rewards     = []
@@ -32,6 +44,18 @@ class RolloutBuffer:
         self.valid_masks = []
 
     def store(self, state, action, reward, done, valid_mask=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            valid_mask (Any): The valid mask value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states.append(state)
         self.actions.append(action)
         self.rewards.append(reward)
@@ -39,9 +63,23 @@ class RolloutBuffer:
         self.valid_masks.append(valid_mask)
 
     def __len__(self):
+        """Return the number of contained items.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return len(self.states)
 
     def to_tensors(self, device, dtype):
+        """Convert buffered values to tensors.
+
+        Args:
+            device (Any): The device value.
+            dtype (Any): The dtype value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         states  = torch.stack(self.states).to(device=device, dtype=dtype)
         actions = torch.stack(self.actions).to(device=device, dtype=dtype)
         rewards = torch.stack(self.rewards).to(device=device, dtype=dtype)
@@ -78,6 +116,22 @@ class AACAgent:
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
     ):
+        """Initialize the instance.
+
+        Args:
+            network (dict): The network value.
+            gamma (float): The gamma value. Defaults to ``0.999``.
+            vf_coef (float): The vf coef value. Defaults to ``0.5``.
+            ent_coef (float): The ent coef value. Defaults to ``0.01``.
+            normalize_advantages (bool): The normalize advantages value. Defaults to ``True``.
+            advantage_type (str): The advantage type value. Defaults to ``'td0'``.
+            gae_lambda (float): The gae lambda value. Defaults to ``0.95``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            device (str): The device value. Defaults to ``'cpu'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if advantage_type not in ("td0", "gae", "mc"):
             raise ValueError(f"advantage_type must be 'td0', 'gae', or 'mc', got '{advantage_type}'.")
         self.gamma                = gamma
@@ -97,6 +151,14 @@ class AACAgent:
         self.net.reset(1)
 
     def infer_logits(self, state: torch.Tensor) -> torch.Tensor:
+        """Infer logits for AACAgent.
+
+        Args:
+            state (torch.Tensor): The state value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         logits, _ = self.net(state)
         return logits
 
@@ -105,6 +167,15 @@ class AACAgent:
         state_seq: torch.Tensor,
         h0: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Infer from seq for AACAgent.
+
+        Args:
+            state_seq (torch.Tensor): The state seq value.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         if h0 is not None:
             self.net.set_states(h0, strict=False)
         return self.net.forward_seq(state_seq)
@@ -116,6 +187,17 @@ class AACAgent:
         explore: bool = False,
         grad_enabled: bool = False,
     ) -> torch.Tensor:
+        """Act for AACAgent.
+
+        Args:
+            state (torch.Tensor): The state value.
+            valid_mask (torch.BoolTensor | None): The valid mask value. Defaults to ``None``.
+            explore (bool): The explore value. Defaults to ``False``.
+            grad_enabled (bool): The grad enabled value. Defaults to ``False``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         with torch.set_grad_enabled(grad_enabled):
             state  = state.to(dtype=self.dtype, device=self.device)
             logits = self.infer_logits(state)
@@ -130,9 +212,30 @@ class AACAgent:
         return action.cpu()
 
     def store(self, state, action, reward, done, valid_mask=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            valid_mask (Any): The valid mask value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.buffer.store(state, action, reward, done, valid_mask=valid_mask)
 
     def init_optimizer(self, lr, optim="AdamW"):
+        """Init optimizer for AACAgent.
+
+        Args:
+            lr (Any): The lr value.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         opt_cls    = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
@@ -141,6 +244,15 @@ class AACAgent:
         last_next_state: torch.Tensor,
         h0: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor | None]:
+        """Compute the advantages.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor | None]: The computed or requested result.
+        """
         states, actions, rewards, dones, valid_masks = self.buffer.to_tensors(self.device, self.dtype)
         actions = actions.squeeze(-1) if actions.dim() > 1 else actions
         rewards = rewards.squeeze(-1) if rewards.dim() > 1 else rewards
@@ -177,6 +289,16 @@ class AACAgent:
         h0: dict | None = None,
         max_grad_norm: float | None = None,
     ) -> dict[str, list[float]]:
+        """Apply one update step.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+            max_grad_norm (float | None): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            dict[str, list[float]]: The computed or requested result.
+        """
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
         if len(self.buffer) == 0:
@@ -226,9 +348,26 @@ class AACAgent:
         return metrics
 
     def save(self, path: str):
+        """Save for AACAgent.
+
+        Args:
+            path (str): The path value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         torch.save({"network": self.net.state_dict()}, path)
 
     def load(self, path: str, strict: bool = True):
+        """Load for AACAgent.
+
+        Args:
+            path (str): The path value.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         ckpt = torch.load(path, map_location=self.device)
         self.net.load_state_dict(ckpt["network"], strict=strict)
 
@@ -247,6 +386,25 @@ class AACAgent:
         store_results=True,
         max_grad_norm=None,
     ):
+        """Train on historical for AACAgent.
+
+        Args:
+            env (Any): The env value.
+            data (Any): The data value.
+            n_episodes (Any): The n episodes value.
+            max_steps (Any): The max steps value. Defaults to ``2000``.
+            warm_up (Any): The warm up value. Defaults to ``0``.
+            update_interval (Any): The update interval value. Defaults to ``100``.
+            burn_in_updates (Any): The burn in updates value. Defaults to ``0``.
+            lr (Any): The lr value. Defaults to ``0.0003``.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
+            store_results (Any): The store results value. Defaults to ``True``.
+            max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
@@ -355,8 +513,7 @@ class AACAgent:
         store_results=True,
         max_grad_norm=None,
     ):
-        """
-        Train on a BatchedMultiCurrencyEnv using pre-stacked tensor data.
+        """Train on a BatchedMultiCurrencyEnv using pre-stacked tensor data.
 
         close, high, low, volume, open_ : (T, N) float tensors
         times                           : (T,)  float64 tensor of Unix timestamps
@@ -370,6 +527,28 @@ class AACAgent:
         the shared recurrent state can stabilise before training begins.
 
         Returns (total_loss, total_reward).
+
+        Args:
+            bat_env (Any): The bat env value.
+            open_ (Any): The open value.
+            close (Any): The close value.
+            high (Any): The high value.
+            low (Any): The low value.
+            volume (Any): The volume value.
+            times (Any): The times value.
+            n_episodes (Any): The n episodes value.
+            max_steps (Any): The max steps value. Defaults to ``2000``.
+            warm_up (Any): The warm up value. Defaults to ``0``.
+            update_interval (Any): The update interval value. Defaults to ``100``.
+            burn_in_updates (Any): The burn in updates value. Defaults to ``1``.
+            lr (Any): The lr value. Defaults to ``0.0003``.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
+            store_results (Any): The store results value. Defaults to ``True``.
+            max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
         """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)

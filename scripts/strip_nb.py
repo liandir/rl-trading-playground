@@ -2,6 +2,14 @@ import sys
 import nbformat
 
 def strip_nb(nb):
+    """Remove outputs, execution counts, and metadata from a notebook.
+
+    Args:
+        nb (NotebookNode): Notebook object to clean.
+
+    Returns:
+        NotebookNode: Cleaned notebook object.
+    """
     # remove cell outputs and execution counts, clear metadata
     for cell in nb.get("cells", []):
         if cell.get("cell_type") == "code":

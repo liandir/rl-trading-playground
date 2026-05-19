@@ -24,3 +24,8 @@ dist/
 
 # uv cache, when configured inside the project
 .uv-cache/
+
+# Generated documentation output (markdown sources in docs/ stay tracked)
+docs/*.html
+docs/api/
+docs/.nojekyll

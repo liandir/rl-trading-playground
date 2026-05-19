@@ -1,3 +1,4 @@
+"""Cli utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +14,14 @@ from .storage import JsonlStore
 
 
 def _parse_when(value: str) -> datetime:
-    """Accept ISO-8601 (``2026-05-17T08:00:00Z``) or ``-Nd`` / ``-Nh``."""
+    """Accept ISO-8601 (``2026-05-17T08:00:00Z``) or ``-Nd`` / ``-Nh``.
+
+    Args:
+        value (str): The value value.
+
+    Returns:
+        datetime: The computed or requested result.
+    """
     v = value.strip()
     if v.startswith("-") and v[-1] in ("d", "h", "m"):
         n = int(v[1:-1])
@@ -32,6 +40,14 @@ def _parse_when(value: str) -> datetime:
 
 
 def _cmd_collect(args: argparse.Namespace) -> int:
+    """Cmd collect for news collection, tagging, deduplication, and storage utilities.
+
+    Args:
+        args (argparse.Namespace): The args value.
+
+    Returns:
+        int: The computed or requested result.
+    """
     cfg = load_config(args.config)
     coll = Collector(cfg)
     since = _parse_when(args.since)
@@ -43,6 +59,14 @@ def _cmd_collect(args: argparse.Namespace) -> int:
 
 
 def _cmd_stats(args: argparse.Namespace) -> int:
+    """Cmd stats for news collection, tagging, deduplication, and storage utilities.
+
+    Args:
+        args (argparse.Namespace): The args value.
+
+    Returns:
+        int: The computed or requested result.
+    """
     cfg = load_config(args.config)
     store = JsonlStore(cfg.data_dir)
     since = _parse_when(args.since)
@@ -65,6 +89,14 @@ def _cmd_stats(args: argparse.Namespace) -> int:
 
 
 def _cmd_reindex(args: argparse.Namespace) -> int:
+    """Cmd reindex for news collection, tagging, deduplication, and storage utilities.
+
+    Args:
+        args (argparse.Namespace): The args value.
+
+    Returns:
+        int: The computed or requested result.
+    """
     cfg = load_config(args.config)
     store = JsonlStore(cfg.data_dir)
     n = store.rebuild_index()
@@ -73,6 +105,11 @@ def _cmd_reindex(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the parser.
+
+    Returns:
+        argparse.ArgumentParser: The computed or requested result.
+    """
     p = argparse.ArgumentParser(prog="news", description="Collect and inspect news articles")
     p.add_argument("--config", required=True, help="path to news config TOML")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -96,6 +133,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the command-line entry point.
+
+    Args:
+        argv (list[str] | None): The argv value. Defaults to ``None``.
+
+    Returns:
+        int: The computed or requested result.
+    """
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

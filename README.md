@@ -1,7 +1,19 @@
 # Multi-Currency Trading Environment — Formal Specification
 
 For the leveraged hierarchical long/short environment, see
-[docs/longshort_leverage_environment.md](/c:/Users/leand/Desktop/multi-currency-trading/docs/longshort_leverage_environment.md).
+[docs/longshort_leverage_environment.md](docs/longshort_leverage_environment.md).
+
+## Documentation
+
+Build the static documentation site with:
+
+```bash
+python3 scripts/build_docs.py
+```
+
+The command reads Python docstrings without importing the project and writes a
+GitHub Pages-compatible site to `docs/`. Open `docs/index.html` locally or use
+the repository's `docs/` folder as the Pages source.
 
 ## 1. Overview
 
@@ -286,4 +298,3 @@ Each step produces one scalar action per asset plus one global capital-allocatio
 ✅ **Action size:** $N + 1$
 
 ---
-

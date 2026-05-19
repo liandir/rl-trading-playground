@@ -1,3 +1,4 @@
+"""Longshort buckets utilities for trading environment state, action, reward, and simulation logic."""
 from typing import Tuple
 
 import torch
@@ -59,6 +60,31 @@ class LongShortEnv(MultiCurrencyEnv):
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
     ):
+        """Initialize the instance.
+
+        Args:
+            N (int): The n value.
+            C0 (float): The c0 value.
+            tau_p (torch.Tensor): The tau p value.
+            bankruptcy_threshold (float): The bankruptcy threshold value. Defaults to ``1.0``.
+            transaction_eps (float): The transaction eps value. Defaults to ``0.01``.
+            use_dollar_volume (bool): The use dollar volume value. Defaults to ``True``.
+            save_history (bool): The save history value. Defaults to ``False``.
+            open_fee (float): The open fee value. Defaults to ``1.0``.
+            close_fee (float): The close fee value. Defaults to ``1.0``.
+            tax_rate (float): The tax rate value. Defaults to ``0.26``.
+            min_open_dollars (float): The min open dollars value. Defaults to ``10.0``.
+            val_coeff (float): The val coeff value. Defaults to ``1.0``.
+            roi_coeff (float): The roi coeff value. Defaults to ``1.0``.
+            reward_mode (str): The reward mode value. Defaults to ``'log'``.
+            size_buckets (Tuple[float, ...]): The size buckets value. Defaults to ``(0.5, 1.0)``.
+            done_reward_penalty (float): The done reward penalty value. Defaults to ``1.0``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            eps (float): The eps value. Defaults to ``1e-08``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(
             N=N,
             C0=C0,
@@ -91,9 +117,23 @@ class LongShortEnv(MultiCurrencyEnv):
     # ------------------------------------------------------------------
 
     def encode_hold(self) -> int:
+        """Encode hold for LongShortEnv.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 0
 
     def encode_long(self, asset_idx: int, bucket_idx: int) -> int:
+        """Encode long for LongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+            bucket_idx (int): The bucket idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         if not (0 <= asset_idx < self.N):
             raise ValueError("asset_idx out of range")
         if not (0 <= bucket_idx < self.K):
@@ -101,6 +141,15 @@ class LongShortEnv(MultiCurrencyEnv):
         return 1 + asset_idx * self.K + bucket_idx
 
     def encode_short(self, asset_idx: int, bucket_idx: int) -> int:
+        """Encode short for LongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+            bucket_idx (int): The bucket idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         if not (0 <= asset_idx < self.N):
             raise ValueError("asset_idx out of range")
         if not (0 <= bucket_idx < self.K):
@@ -108,6 +157,15 @@ class LongShortEnv(MultiCurrencyEnv):
         return 1 + self.N * self.K + asset_idx * self.K + bucket_idx
 
     def encode_close(self, asset_idx: int, bucket_idx: int) -> int:
+        """Encode close for LongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+            bucket_idx (int): The bucket idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         if not (0 <= asset_idx < self.N):
             raise ValueError("asset_idx out of range")
         if not (0 <= bucket_idx < self.K):
@@ -115,6 +173,14 @@ class LongShortEnv(MultiCurrencyEnv):
         return 1 + 2 * self.N * self.K + asset_idx * self.K + bucket_idx
 
     def decode_action(self, action_idx: int) -> tuple[str, int | None, float | None]:
+        """Decode action for LongShortEnv.
+
+        Args:
+            action_idx (int): The action idx value.
+
+        Returns:
+            tuple[str, int | None, float | None]: The computed or requested result.
+        """
         if action_idx == 0:
             return ("hold", None, None)
 
@@ -143,6 +209,11 @@ class LongShortEnv(MultiCurrencyEnv):
         raise ValueError(f"invalid action index {action_idx}")
 
     def valid_action_mask(self) -> torch.Tensor:
+        """Valid action mask for LongShortEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         mask = torch.zeros(self.action_dim, dtype=torch.bool, device=self._state_device())
         mask[0] = True
 
@@ -202,6 +273,14 @@ class LongShortEnv(MultiCurrencyEnv):
     # ------------------------------------------------------------------
 
     def _trade(self, a) -> tuple[torch.Tensor, bool]:
+        """Trade for LongShortEnv.
+
+        Args:
+            a (Any): The a value.
+
+        Returns:
+            tuple[torch.Tensor, bool]: The computed or requested result.
+        """
         self.realized_cost.zero_()
         self.realized_pnl.zero_()
 
@@ -283,6 +362,31 @@ class BatchedLongShortEnv(BatchedMultiCurrencyEnv):
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
     ):
+        """Initialize the instance.
+
+        Args:
+            B (int): The b value.
+            N (int): The n value.
+            C0 (float): The c0 value.
+            tau_p (torch.Tensor): The tau p value.
+            bankruptcy_threshold (float): The bankruptcy threshold value. Defaults to ``1.0``.
+            transaction_eps (float): The transaction eps value. Defaults to ``0.01``.
+            use_dollar_volume (bool): The use dollar volume value. Defaults to ``True``.
+            open_fee (float): The open fee value. Defaults to ``1.0``.
+            close_fee (float): The close fee value. Defaults to ``1.0``.
+            tax_rate (float): The tax rate value. Defaults to ``0.26``.
+            min_open_dollars (float): The min open dollars value. Defaults to ``10.0``.
+            val_coeff (float): The val coeff value. Defaults to ``1.0``.
+            roi_coeff (float): The roi coeff value. Defaults to ``1.0``.
+            reward_mode (str): The reward mode value. Defaults to ``'log'``.
+            size_buckets (Tuple[float, ...]): The size buckets value. Defaults to ``(0.5, 1.0)``.
+            done_reward_penalty (float): The done reward penalty value. Defaults to ``1.0``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            eps (float): The eps value. Defaults to ``1e-08``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(
             B=B,
             N=N,
@@ -315,18 +419,58 @@ class BatchedLongShortEnv(BatchedMultiCurrencyEnv):
     # ------------------------------------------------------------------
 
     def encode_hold(self) -> int:
+        """Encode hold for BatchedLongShortEnv.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 0
 
     def encode_long(self, asset_idx: int, bucket_idx: int) -> int:
+        """Encode long for BatchedLongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+            bucket_idx (int): The bucket idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 1 + asset_idx * self.K + bucket_idx
 
     def encode_short(self, asset_idx: int, bucket_idx: int) -> int:
+        """Encode short for BatchedLongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+            bucket_idx (int): The bucket idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 1 + self.N * self.K + asset_idx * self.K + bucket_idx
 
     def encode_close(self, asset_idx: int, bucket_idx: int) -> int:
+        """Encode close for BatchedLongShortEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+            bucket_idx (int): The bucket idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 1 + 2 * self.N * self.K + asset_idx * self.K + bucket_idx
 
     def _split_bucket_actions(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Split bucket actions for BatchedLongShortEnv.
+
+        Args:
+            actions (torch.Tensor): The actions value.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         actions = torch.as_tensor(actions, dtype=torch.long).to(self.C.device).reshape(-1)
         if actions.numel() != self.B:
             raise ValueError(f"actions must have {self.B} elements, got {actions.numel()}")
@@ -372,6 +516,14 @@ class BatchedLongShortEnv(BatchedMultiCurrencyEnv):
     # ------------------------------------------------------------------
 
     def _trade(self, actions: torch.Tensor) -> None:
+        """Trade for BatchedLongShortEnv.
+
+        Args:
+            actions (torch.Tensor): The actions value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         base_actions, frac = self._split_bucket_actions(actions)
         super()._trade((base_actions, frac))
 
@@ -380,6 +532,11 @@ class BatchedLongShortEnv(BatchedMultiCurrencyEnv):
     # ------------------------------------------------------------------
 
     def valid_action_mask(self) -> torch.Tensor:
+        """Valid action mask for BatchedLongShortEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B, N = self.B, self.N
         eps = self.eps
 

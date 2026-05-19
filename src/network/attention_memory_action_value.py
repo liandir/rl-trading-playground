@@ -1,3 +1,4 @@
+"""Attention memory action value utilities for neural network architectures and reusable model components."""
 import torch
 
 from src.network.core.attention import ResidualSelfAttentionBlock
@@ -110,6 +111,39 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
     ):
+        """Initialize the instance.
+
+        Args:
+            num_assets (int): The num assets value.
+            d_asset (int): The d asset value.
+            d_global (int): The d global value.
+            action_dim (int): The action dim value.
+            d_model (int): The d model value. Defaults to ``64``.
+            asset_embed_dim (int | None): The asset embed dim value. Defaults to ``None``.
+            hidden_dims_asset (Any): The hidden dims asset value. Defaults to ``None``.
+            num_heads (int): The num heads value. Defaults to ``1``.
+            n_att_layers (int): The n att layers value. Defaults to ``1``.
+            use_layer_norm (bool): The use layer norm value. Defaults to ``False``.
+            d_mem (int): The d mem value. Defaults to ``64``.
+            d_ff (int): The d ff value. Defaults to ``64``.
+            hidden_dims_mem (Any): The hidden dims mem value. Defaults to ``None``.
+            hidden_dims_ff (Any): The hidden dims ff value. Defaults to ``None``.
+            hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
+            hidden_dims_value (Any): The hidden dims value value. Defaults to ``None``.
+            combine_mode (str): The combine mode value. Defaults to ``'concat'``.
+            output_mode (str): The output mode value. Defaults to ``'pooled'``.
+            n_directions (int): The n directions value. Defaults to ``3``.
+            hidden_dims_per_asset_head (Any): The hidden dims per asset head value. Defaults to ``None``.
+            aux_horizons (tuple | None): The aux horizons value. Defaults to ``None``.
+            hidden_dims_aux (Any): The hidden dims aux value. Defaults to ``None``.
+            activation (Any): The activation value. Defaults to ``torch.tanh``.
+            recurrent_activation (Any): The recurrent activation value. Defaults to ``torch.tanh``.
+            recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
+            recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         if output_mode not in ("pooled", "per_asset"):
             raise ValueError(f"output_mode must be 'pooled' or 'per_asset', got '{output_mode}'.")
@@ -254,14 +288,19 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
             self.aux_reward = self.aux_asset_ret = self.aux_asset_vol = None
 
     def _encode_tokens(self, x_flat: torch.Tensor) -> torch.Tensor:
-        """
-        x_flat : (B, state_dim)  →  tokens (B, N, token_dim)
+        """x_flat : (B, state_dim)  →  tokens (B, N, token_dim)
 
         Splits into globals + per-asset block, runs the shared per-asset MLP,
         concatenates a learned per-asset embedding, and applies the
         transformer-style attention/FFN stack across assets. Flattening is left to
         ``_flatten_tokens`` so callers can also access the per-token
         representation.
+
+        Args:
+            x_flat (torch.Tensor): The x flat value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         B = x_flat.shape[0]
         globals_feat = x_flat[:, : self.d_global]                                          # (B, d_global)
@@ -278,14 +317,27 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         return tokens
 
     def _flatten_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
-        """tokens (B, N, token_dim) → (B, post_attn_dim)"""
+        """tokens (B, N, token_dim) → (B, post_attn_dim)
+
+        Args:
+            tokens (torch.Tensor): The tokens value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return tokens.reshape(tokens.shape[0], -1)
 
     def _build_logits(self, tokens: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
-        """
-        tokens : (B, N, token_dim)
+        """tokens : (B, N, token_dim)
         h      : (B, d_mem + d_ff)
         returns logits (B, action_dim)
+
+        Args:
+            tokens (torch.Tensor): The tokens value.
+            h (torch.Tensor): The h value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         if self.output_mode == "pooled":
             return self.actor(h)
@@ -302,12 +354,28 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         return torch.cat(parts, dim=-1)                                                     # (B, action_dim)
 
     def _combine(self, h_mem: torch.Tensor, h_ff: torch.Tensor) -> torch.Tensor:
+        """Combine for AttentionMemoryActionValueNetwork.
+
+        Args:
+            h_mem (torch.Tensor): The h mem value.
+            h_ff (torch.Tensor): The h ff value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if self.combine_mode == "add":
             return h_mem + h_ff
         return torch.cat([h_mem, h_ff], dim=-1)
 
     def _build_aux(self, h: torch.Tensor) -> dict[str, torch.Tensor]:
-        """h : (M, head_in) → flat aux dict with leading dim M."""
+        """h : (M, head_in) → flat aux dict with leading dim M.
+
+        Args:
+            h (torch.Tensor): The h value.
+
+        Returns:
+            dict[str, torch.Tensor]: The computed or requested result.
+        """
         return {
             "reward":    self.aux_reward(h).squeeze(-1),
             "asset_ret": self.aux_asset_ret(h).view(h.shape[0], self.num_assets, self.n_aux_horizons),
@@ -317,11 +385,27 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         }
 
     def reset(self, batch_size: int = 1):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
         self.recurrent.reset(batch_size, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor):
+        """Compute the forward pass.
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         shape = x.shape  # (..., state_dim)
         x_flat = x.reshape(-1, self.state_dim)                          # (B', state_dim)
         tokens = self._encode_tokens(x_flat)                            # (B', N, token_dim)
@@ -349,12 +433,17 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         return logits, values, aux
 
     def forward_seq(self, x_seq: torch.Tensor):
-        """
-        x_seq : (T, state_dim) or (T, B, state_dim)
+        """x_seq : (T, state_dim) or (T, B, state_dim)
 
         Returns (logits, values) when aux_horizons is None, otherwise
         (logits, values, aux) — matching the AuxiliaryPerAssetActionValueNetwork
         interface so this network can be dropped in for HierarchicalAuxAACAgent.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            Any: The computed or requested result.
         """
         if x_seq.dim() == 2:
             if x_seq.shape[-1] != self.state_dim:
@@ -414,6 +503,15 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         return logits_seq, values_seq, aux_seq
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        """Return a snapshot of recurrent states.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         if self._recurrent_is_network:
             rec_state = self.recurrent.get_states(clone=clone, detach=detach)
         else:
@@ -421,6 +519,17 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         return {"recurrent": rec_state}
 
     def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+        """Restore recurrent states from a snapshot.
+
+        Args:
+            states (dict): The states value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if strict and "recurrent" not in states:
             raise KeyError("Missing key 'recurrent' in states snapshot.")
         rec_state = states.get("recurrent")

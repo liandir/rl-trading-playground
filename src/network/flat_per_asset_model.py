@@ -1,3 +1,4 @@
+"""Flat per asset model utilities for neural network architectures and reusable model components."""
 import torch
 
 from src.network.core.branches import LatentRecurrentFeedForwardBranch
@@ -43,6 +44,36 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
     ):
+        """Initialize the instance.
+
+        Args:
+            num_assets (int): The num assets value.
+            d_asset (int): The d asset value.
+            d_global (int): The d global value.
+            action_dim (int): The action dim value.
+            d_model (int): The d model value. Defaults to ``64``.
+            asset_embed_dim (int | None): The asset embed dim value. Defaults to ``None``.
+            asset_embedding_mode (str): The asset embedding mode value. Defaults to ``'concat'``.
+            hidden_dims_asset (Any): The hidden dims asset value. Defaults to ``None``.
+            d_mem (int): The d mem value. Defaults to ``64``.
+            d_ff (int): The d ff value. Defaults to ``64``.
+            hidden_dims_mem (Any): The hidden dims mem value. Defaults to ``None``.
+            hidden_dims_ff (Any): The hidden dims ff value. Defaults to ``None``.
+            combine_mode (str): The combine mode value. Defaults to ``'concat'``.
+            actor_recurrent (bool): The actor recurrent value. Defaults to ``False``.
+            value_recurrent (bool): The value recurrent value. Defaults to ``False``.
+            model_recurrent (bool): The model recurrent value. Defaults to ``False``.
+            hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
+            hidden_dims_value (Any): The hidden dims value value. Defaults to ``None``.
+            hidden_dims_model (Any): The hidden dims model value. Defaults to ``None``.
+            activation (Any): The activation value. Defaults to ``torch.tanh``.
+            recurrent_activation (Any): The recurrent activation value. Defaults to ``torch.tanh``.
+            recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
+            recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
         hidden_dims_asset = hidden_dims_asset or []
         hidden_dims_mem = hidden_dims_mem or []
@@ -131,6 +162,17 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         )
 
     def _build_head(self, n_in: int, n_out: int, recurrent: bool, hidden_dims: list[int]) -> torch.nn.Module:
+        """Build the head.
+
+        Args:
+            n_in (int): The n in value.
+            n_out (int): The n out value.
+            recurrent (bool): The recurrent value.
+            hidden_dims (list[int]): The hidden dims value.
+
+        Returns:
+            torch.nn.Module: The computed or requested result.
+        """
         if recurrent:
             return RecurrentNetwork(
                 n_in,
@@ -143,6 +185,14 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         return VanillaNetwork(n_in, n_out, hidden_dims=hidden_dims, activation=self.activation)
 
     def _encode_tokens(self, x_flat: torch.Tensor) -> torch.Tensor:
+        """Encode tokens for FlatPerAssetModelNetwork.
+
+        Args:
+            x_flat (torch.Tensor): The x flat value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B = x_flat.shape[0]
         globals_feat = x_flat[:, : self.d_global]
         asset_feat = x_flat[:, self.d_global :].view(B, self.num_assets, self.d_asset)
@@ -156,6 +206,14 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         return torch.cat([asset_repr, asset_emb], dim=-1)
 
     def _encode_action(self, action: torch.Tensor) -> torch.Tensor:
+        """Encode action for FlatPerAssetModelNetwork.
+
+        Args:
+            action (torch.Tensor): The action value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         a_d = action[..., 0].long().clamp(0, self.primary_action_dim - 1)
         a_q = action[..., 1].long().clamp(0, self.n_size_buckets - 1)
         primary = torch.nn.functional.one_hot(a_d, self.primary_action_dim)
@@ -163,20 +221,53 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         return torch.cat([primary, bucket], dim=-1).to(dtype=next(self.parameters()).dtype, device=action.device)
 
     def _global(self, z: torch.Tensor) -> torch.Tensor:
+        """Global for FlatPerAssetModelNetwork.
+
+        Args:
+            z (torch.Tensor): The z value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         shape = z.shape
         h = self.global_branch(z.reshape(-1, self.latent_dim))
         return h.reshape(shape[:-1] + (self.global_dim,))
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode for FlatPerAssetModelNetwork.
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         shape = x.shape
         x_flat = x.reshape(-1, self.state_dim)
         z = self._encode_tokens(x_flat).reshape(x_flat.shape[0], self.latent_dim)
         return z.reshape(shape[:-1] + (self.latent_dim,))
 
     def encode_latent(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode latent for FlatPerAssetModelNetwork.
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return self.encode(x)
 
     def action(self, z: torch.Tensor, global_h: torch.Tensor | None = None) -> torch.Tensor:
+        """Action for FlatPerAssetModelNetwork.
+
+        Args:
+            z (torch.Tensor): The z value.
+            global_h (torch.Tensor | None): The global h value. Defaults to ``None``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if global_h is None:
             global_h = self._global(z)
         shape = z.shape
@@ -184,12 +275,29 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         return logits.reshape(shape[:-1] + (self.action_dim,))
 
     def value(self, z: torch.Tensor, global_h: torch.Tensor | None = None) -> torch.Tensor:
+        """Value for FlatPerAssetModelNetwork.
+
+        Args:
+            z (torch.Tensor): The z value.
+            global_h (torch.Tensor | None): The global h value. Defaults to ``None``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if global_h is None:
             global_h = self._global(z)
         shape = z.shape
         return self.value_head(global_h.reshape(-1, self.global_dim)).squeeze(-1).reshape(shape[:-1])
 
     def policy_value_from_latent(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Policy value from latent for FlatPerAssetModelNetwork.
+
+        Args:
+            z (torch.Tensor): The z value.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         global_h = self._global(z)
         return self.action(z, global_h=global_h), self.value(z, global_h=global_h)
 
@@ -199,6 +307,16 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         action: torch.Tensor,
         global_h: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """Model for FlatPerAssetModelNetwork.
+
+        Args:
+            z (torch.Tensor): The z value.
+            action (torch.Tensor): The action value.
+            global_h (torch.Tensor | None): The global h value. Defaults to ``None``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if global_h is None:
             global_h = self._global(z)
         action_enc = self._encode_action(action.reshape(-1, 2).to(device=z.device))
@@ -206,6 +324,15 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         return self.model_head(model_in).reshape(z.shape)
 
     def model_seq(self, z_seq: torch.Tensor, action_seq: torch.Tensor) -> torch.Tensor:
+        """Model seq for FlatPerAssetModelNetwork.
+
+        Args:
+            z_seq (torch.Tensor): The z seq value.
+            action_seq (torch.Tensor): The action seq value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if z_seq.shape[:-1] != action_seq.shape[:-1] or action_seq.shape[-1] != 2:
             raise ValueError(
                 "Expected z_seq shape (..., latent_dim) and action_seq shape (..., 2), "
@@ -216,15 +343,40 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         return self.model_head.forward_seq(torch.cat([global_seq, action_enc], dim=-1))
 
     def model_step(self, z: torch.Tensor, action: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Model step for FlatPerAssetModelNetwork.
+
+        Args:
+            z (torch.Tensor): The z value.
+            action (torch.Tensor): The action value.
+
+        Returns:
+            dict[str, torch.Tensor]: The computed or requested result.
+        """
         next_z = self.model(z, action)
         reward = torch.zeros(next_z.shape[:-1], dtype=next_z.dtype, device=next_z.device)
         done = torch.zeros_like(reward)
         return {"next_latent": next_z, "reward": reward, "done": done}
 
     def forward(self, x: torch.Tensor):
+        """Compute the forward pass.
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return self.policy_value_from_latent(self.encode(x))
 
     def forward_seq(self, x_seq: torch.Tensor):
+        """Compute a forward pass over a sequence.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if x_seq.dim() not in (2, 3) or x_seq.shape[-1] != self.state_dim:
             raise ValueError(
                 f"Expected sequence input with shape (T, {self.state_dim}) or "
@@ -244,6 +396,14 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         return logits, values
 
     def reset(self, batch_size: int = 1):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
         self.global_branch.reset(batch_size, device=device, dtype=dtype)
@@ -252,6 +412,15 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         self.model_head.reset(batch_size, device=device, dtype=dtype)
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        """Return a snapshot of recurrent states.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         return {
             "global": self.global_branch.get_state(clone=clone, detach=detach),
             "actor": self.actor.get_states(clone=clone, detach=detach),
@@ -260,6 +429,17 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         }
 
     def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+        """Restore recurrent states from a snapshot.
+
+        Args:
+            states (dict): The states value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if strict:
             for key in ("global", "actor", "value", "model"):
                 if key not in states:

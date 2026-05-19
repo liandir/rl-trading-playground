@@ -1,3 +1,4 @@
+"""Resample utilities for Kraken market data and exchange integration helpers."""
 from __future__ import annotations
 
 import math
@@ -6,6 +7,7 @@ from .models import MarketFrame, PairSnapshot
 
 
 class IntervalAggregator:
+    """IntervalAggregator implementation for Kraken market data and exchange integration helpers."""
     def __init__(
         self,
         pairs: list[str] | tuple[str, ...],
@@ -13,6 +15,16 @@ class IntervalAggregator:
         *,
         wait_until_all_pairs_ready: bool = True,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            pairs (list[str] | tuple[str, ...]): The pairs value.
+            interval_seconds (float): The interval seconds value.
+            wait_until_all_pairs_ready (bool): The wait until all pairs ready value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive.")
 
@@ -26,6 +38,14 @@ class IntervalAggregator:
         self._ready_pairs: set[str] = set()
 
     def add(self, update: PairSnapshot) -> list[MarketFrame]:
+        """Add for IntervalAggregator.
+
+        Args:
+            update (PairSnapshot): The update value.
+
+        Returns:
+            list[MarketFrame]: The computed or requested result.
+        """
         event_time = float(update.timestamp)
         if self._bucket_start is None:
             self._bucket_start = math.floor(event_time / self.interval_seconds) * self.interval_seconds
@@ -48,11 +68,24 @@ class IntervalAggregator:
         return emitted
 
     def flush(self) -> MarketFrame | None:
+        """Flush for IntervalAggregator.
+
+        Returns:
+            MarketFrame | None: The computed or requested result.
+        """
         if self._bucket_start is None:
             return None
         return self._build_frame(self._bucket_start + self.interval_seconds)
 
     def _build_frame(self, frame_time: float) -> MarketFrame | None:
+        """Build the frame.
+
+        Args:
+            frame_time (float): The frame time value.
+
+        Returns:
+            MarketFrame | None: The computed or requested result.
+        """
         if self.wait_until_all_pairs_ready and len(self._ready_pairs) < len(self.pairs):
             return None
 

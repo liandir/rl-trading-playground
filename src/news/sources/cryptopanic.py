@@ -1,3 +1,4 @@
+"""Cryptopanic utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 import os
@@ -33,6 +34,22 @@ class CryptoPanicSource(NewsSource):
         currencies: list[str] | None = None,
         max_pages: int = 20,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            name (str): The name value.
+            credibility (float): The credibility value.
+            asset_universe (list[str]): The asset universe value.
+            api_key_env (str): The api key env value. Defaults to ``'CRYPTOPANIC_API_KEY'``.
+            filter (str | None): The filter value. Defaults to ``None``.
+            kind (str): The kind value. Defaults to ``'news'``.
+            public (bool): The public value. Defaults to ``True``.
+            currencies (list[str] | None): The currencies value. Defaults to ``None``.
+            max_pages (int): The max pages value. Defaults to ``20``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(name=name, credibility=credibility, asset_universe=asset_universe)
         self._api_key = os.getenv(api_key_env, "")
         self._filter = filter
@@ -42,6 +59,15 @@ class CryptoPanicSource(NewsSource):
         self._max_pages = int(max_pages)
 
     def fetch(self, since: datetime, until: datetime) -> Iterator[RawArticle]:
+        """Fetch items from the configured source.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+
+        Returns:
+            Iterator[RawArticle]: The computed or requested result.
+        """
         if not self._api_key:
             raise RuntimeError("CRYPTOPANIC_API_KEY is not set")
 
@@ -91,6 +117,14 @@ class CryptoPanicSource(NewsSource):
 
 
 def _parse_iso(ts: str | None) -> datetime | None:
+    """Parse the iso.
+
+    Args:
+        ts (str | None): The ts value.
+
+    Returns:
+        datetime | None: The computed or requested result.
+    """
     if not ts:
         return None
     if ts.endswith("Z"):

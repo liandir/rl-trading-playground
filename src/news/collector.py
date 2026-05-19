@@ -1,3 +1,4 @@
+"""Collector utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 import logging
@@ -16,6 +17,7 @@ log = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class CollectionStats:
+    """CollectionStats implementation for news collection, tagging, deduplication, and storage utilities."""
     fetched: int = 0
     written: int = 0
     skipped_existing: int = 0
@@ -36,6 +38,15 @@ class Collector:
     """
 
     def __init__(self, config: NewsConfig, store: JsonlStore | None = None) -> None:
+        """Initialize the instance.
+
+        Args:
+            config (NewsConfig): The config value.
+            store (JsonlStore | None): The store value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.config = config
         self.store = store or JsonlStore(config.data_dir)
         self.tagger = AliasTagger(
@@ -51,6 +62,16 @@ class Collector:
         *,
         source_names: list[str] | None = None,
     ) -> CollectionStats:
+        """Collect for Collector.
+
+        Args:
+            since (datetime): The since value.
+            until (datetime): The until value.
+            source_names (list[str] | None): The source names value. Defaults to ``None``.
+
+        Returns:
+            CollectionStats: The computed or requested result.
+        """
         since_u = since.astimezone(timezone.utc)
         until_u = until.astimezone(timezone.utc)
         stats = CollectionStats()
@@ -86,6 +107,15 @@ class Collector:
         return stats
 
     def _ingest(self, raw: RawArticle, stats: CollectionStats) -> bool:
+        """Ingest for Collector.
+
+        Args:
+            raw (RawArticle): The raw value.
+            stats (CollectionStats): The stats value.
+
+        Returns:
+            bool: The computed or requested result.
+        """
         canon = canonicalize_url(raw.url)
         aid = article_id(canon)
         if self.store.has(aid):
@@ -141,13 +171,29 @@ class Collector:
         return self.store.write(article)
 
     def _credibility_for(self, source_name: str) -> float:
+        """Credibility for for Collector.
+
+        Args:
+            source_name (str): The source name value.
+
+        Returns:
+            float: The computed or requested result.
+        """
         for s in self.config.sources:
             if s.name == source_name:
                 return float(s.credibility)
         return 0.5
 
     def _find_near_dup(self, ts: datetime, shingle_hex: str) -> str | None:
-        """Search the same UTC day across all sources for a near-dup."""
+        """Search the same UTC day across all sources for a near-dup.
+
+        Args:
+            ts (datetime): The ts value.
+            shingle_hex (str): The shingle hex value.
+
+        Returns:
+            str | None: The computed or requested result.
+        """
         candidate = int(shingle_hex, 16)
         from datetime import timedelta
         since = ts - timedelta(hours=12)

@@ -1,3 +1,4 @@
+"""Aaq hierarchical utilities for reinforcement-learning agents and training utilities."""
 import torch
 
 from src.agent.utils import (
@@ -22,6 +23,16 @@ class HierarchicalAAQAgent(_HierarchicalAACAgent):
     """Sequence-capable hierarchical actor-Q critic."""
 
     def compute_advantages(self, last_next_state: torch.Tensor, h0=None, last_next_mask: dict | None = None):
+        """Compute the advantages.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (Any): The h0 value. Defaults to ``None``.
+            last_next_mask (dict | None): The last next mask value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         states, actions, rewards, dones, masks = self.buffer.to_tensors(self.device, self.dtype)
         rewards = rewards.squeeze(-1) if rewards.dim() > actions.dim() - 1 else rewards
         dones   = dones.squeeze(-1)   if dones.dim()   > actions.dim() - 1 else dones
@@ -67,6 +78,17 @@ class HierarchicalAAQAgent(_HierarchicalAACAgent):
         last_next_mask: dict | None = None,
         max_grad_norm: float | None = None,
     ) -> dict[str, list[float]]:
+        """Apply one update step.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+            last_next_mask (dict | None): The last next mask value. Defaults to ``None``.
+            max_grad_norm (float | None): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            dict[str, list[float]]: The computed or requested result.
+        """
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
         if len(self.buffer) == 0:

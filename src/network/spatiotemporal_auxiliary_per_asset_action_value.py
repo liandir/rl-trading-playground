@@ -1,3 +1,4 @@
+"""Spatiotemporal auxiliary per asset action value utilities for neural network architectures and reusable model components."""
 import torch
 
 from src.network.core.attention import ResidualSelfAttentionBlock
@@ -61,6 +62,40 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
         recurrent_type: str = "gru",
         recurrent_kwargs: dict | None = None,
     ):
+        """Initialize the instance.
+
+        Args:
+            num_assets (int): The num assets value.
+            d_asset (int): The d asset value.
+            d_global (int): The d global value.
+            action_dim (int): The action dim value.
+            d_model (int): The d model value. Defaults to ``64``.
+            asset_embed_dim (int | None): The asset embed dim value. Defaults to ``None``.
+            hidden_dims_asset (list | None): The hidden dims asset value. Defaults to ``None``.
+            window_size (int): The window size value. Defaults to ``64``.
+            n_temporal_layers (int): The n temporal layers value. Defaults to ``2``.
+            temporal_num_heads (int): The temporal num heads value. Defaults to ``4``.
+            n_asset_layers (int): The n asset layers value. Defaults to ``1``.
+            asset_num_heads (int): The asset num heads value. Defaults to ``4``.
+            use_layer_norm (bool): The use layer norm value. Defaults to ``True``.
+            attn_dropout (float): The attn dropout value. Defaults to ``0.0``.
+            d_mem (int): The d mem value. Defaults to ``512``.
+            d_ff (int): The d ff value. Defaults to ``512``.
+            hidden_dims_mem (list | None): The hidden dims mem value. Defaults to ``None``.
+            hidden_dims_ff (list | None): The hidden dims ff value. Defaults to ``None``.
+            hidden_dims_actor (list | None): The hidden dims actor value. Defaults to ``None``.
+            hidden_dims_value (list | None): The hidden dims value value. Defaults to ``None``.
+            hidden_dims_aux (list | None): The hidden dims aux value. Defaults to ``None``.
+            combine_mode (str): The combine mode value. Defaults to ``'concat'``.
+            aux_horizons (tuple): The aux horizons value. Defaults to ``(1, 5, 20)``.
+            activation (Any): The activation value. Defaults to ``torch.nn.GELU()``.
+            recurrent_activation (Any): The recurrent activation value. Defaults to ``torch.tanh``.
+            recurrent_type (str): The recurrent type value. Defaults to ``'gru'``.
+            recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__()
 
         if combine_mode not in ("concat", "add"):
@@ -168,7 +203,14 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
     # ------------------------------------------------------------------
 
     def _tokenize(self, x_flat: torch.Tensor) -> torch.Tensor:
-        """x_flat (M, state_dim) → tokens (M, N, token_dim)."""
+        """x_flat (M, state_dim) → tokens (M, N, token_dim).
+
+        Args:
+            x_flat (torch.Tensor): The x flat value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         M, N = x_flat.shape[0], self.num_assets
         g    = x_flat[:, :self.d_global]                                         # (M, d_global)
         a    = x_flat[:, self.d_global:].reshape(M, N, self.d_asset)             # (M, N, d_asset)
@@ -179,7 +221,14 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
         return torch.cat([r, e], dim=-1)                                          # (M, N, token_dim)
 
     def _temporal_attn(self, u: torch.Tensor) -> torch.Tensor:
-        """u (B, T, N, D) → v (B, T, N, D): causal per-asset temporal attention."""
+        """u (B, T, N, D) → v (B, T, N, D): causal per-asset temporal attention.
+
+        Args:
+            u (torch.Tensor): The u value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B, T, N, D = u.shape
         mask  = _build_causal_mask(T, self.window_size, u.device)
         u_bn  = u.permute(0, 2, 1, 3).reshape(B * N, T, D)   # (B*N, T, D)
@@ -188,15 +237,40 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
         return u_bn.reshape(B, N, T, D).permute(0, 2, 1, 3)  # (B, T, N, D)
 
     def _asset_attn(self, v: torch.Tensor) -> torch.Tensor:
-        """v (M, N, D) → c (M, N, D): unconstrained cross-asset attention."""
+        """v (M, N, D) → c (M, N, D): unconstrained cross-asset attention.
+
+        Args:
+            v (torch.Tensor): The v value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         for layer in self.asset_layers:
             v = layer(v)
         return v
 
     def _combine(self, h_mem: torch.Tensor, h_ff: torch.Tensor) -> torch.Tensor:
+        """Combine for SpatiotemporalAuxiliaryPerAssetActionValueNetwork.
+
+        Args:
+            h_mem (torch.Tensor): The h mem value.
+            h_ff (torch.Tensor): The h ff value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return h_mem + h_ff if self.combine_mode == "add" else torch.cat([h_mem, h_ff], dim=-1)
 
     def _build_aux(self, h: torch.Tensor, prefix: torch.Size) -> dict:
+        """Build the aux.
+
+        Args:
+            h (torch.Tensor): The h value.
+            prefix (torch.Size): The prefix value.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         M = h.shape[0]
         return {
             "reward":    self.aux_reward(h).squeeze(-1).reshape(prefix),
@@ -214,6 +288,14 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
     # ------------------------------------------------------------------
 
     def reset(self, batch_size: int = 1):
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            batch_size (int): The batch size value. Defaults to ``1``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = next(self.parameters()).device
         dtype  = next(self.parameters()).dtype
         self._window_buffer = torch.zeros(
@@ -222,6 +304,15 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
         self.recurrent.reset(batch_size, device=device, dtype=dtype)
 
     def get_states(self, clone: bool = True, detach: bool = True) -> dict:
+        """Return a snapshot of recurrent states.
+
+        Args:
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+
+        Returns:
+            dict: The computed or requested result.
+        """
         if self._recurrent_is_network:
             rec = self.recurrent.get_states(clone=clone, detach=detach)
         else:
@@ -233,6 +324,17 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
         return {"recurrent": rec, "buffer": buf}
 
     def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+        """Restore recurrent states from a snapshot.
+
+        Args:
+            states (dict): The states value.
+            clone (bool): The clone value. Defaults to ``True``.
+            detach (bool): The detach value. Defaults to ``True``.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if strict and "recurrent" not in states:
             raise KeyError("Missing key 'recurrent' in states snapshot.")
         rec_state = states.get("recurrent")
@@ -249,11 +351,16 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
     # ------------------------------------------------------------------
 
     def forward(self, x: torch.Tensor) -> tuple:
-        """
-        x : (state_dim,) or (B, state_dim)
+        """x : (state_dim,) or (B, state_dim)
 
         Shifts the internal W-step buffer, appends x, runs the full
         spatiotemporal pipeline and returns (logits, values, aux).
+
+        Args:
+            x (torch.Tensor): The x value.
+
+        Returns:
+            tuple: The computed or requested result.
         """
         if x.dim() == 1:
             x = x.unsqueeze(0)
@@ -291,12 +398,17 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
     # ------------------------------------------------------------------
 
     def forward_seq(self, x_seq: torch.Tensor) -> tuple:
-        """
-        x_seq : (T, state_dim) or (T, B, state_dim)
+        """x_seq : (T, state_dim) or (T, B, state_dim)
 
         Causal temporal attention runs over the full T dimension with a
         window_size cap, so position t attends to [max(0, t-W+1) .. t].
         Cross-asset attention and the recurrent+FF trunk run at every t.
+
+        Args:
+            x_seq (torch.Tensor): The x seq value.
+
+        Returns:
+            tuple: The computed or requested result.
         """
         if x_seq.dim() == 2:
             T, _  = x_seq.shape

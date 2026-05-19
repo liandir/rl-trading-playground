@@ -1,3 +1,4 @@
+"""Longshort hierarchical leverage utilities for trading environment state, action, reward, and simulation logic."""
 from typing import Dict, Tuple
 
 import torch
@@ -56,6 +57,34 @@ class LongShortHierarchicalLeverageEnv(LeveragedMultiCurrencyEnv):
         device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
+        """Initialize the instance.
+
+        Args:
+            N (int): The n value.
+            C0 (float): The c0 value.
+            tau_p (torch.Tensor): The tau p value.
+            bankruptcy_threshold (float): The bankruptcy threshold value. Defaults to ``1.0``.
+            transaction_eps (float): The transaction eps value. Defaults to ``0.01``.
+            use_dollar_volume (bool): The use dollar volume value. Defaults to ``True``.
+            save_history (bool): The save history value. Defaults to ``False``.
+            open_fee (float): The open fee value. Defaults to ``1.0``.
+            close_fee (float): The close fee value. Defaults to ``1.0``.
+            tax_rate (float): The tax rate value. Defaults to ``0.26``.
+            min_open_dollars (float): The min open dollars value. Defaults to ``10.0``.
+            val_coeff (float): The val coeff value. Defaults to ``1.0``.
+            roi_coeff (float): The roi coeff value. Defaults to ``1.0``.
+            reward_mode (str): The reward mode value. Defaults to ``'log'``.
+            size_buckets (Tuple[float, ...]): The size buckets value. Defaults to ``(0.5, 1.0)``.
+            done_reward_penalty (float): The done reward penalty value. Defaults to ``1.0``.
+            max_leverage (float): The max leverage value. Defaults to ``2.0``.
+            maintenance_margin_ratio (float | None): The maintenance margin ratio value. Defaults to ``None``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            device (str | torch.device | None): The device value. Defaults to ``None``.
+            eps (float): The eps value. Defaults to ``1e-08``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(
             N=N,
             C0=C0,
@@ -90,6 +119,11 @@ class LongShortHierarchicalLeverageEnv(LeveragedMultiCurrencyEnv):
         self.action_dim = self.primary_action_dim + 2 * self.K
 
     def valid_action_mask(self) -> Dict[str, torch.Tensor]:
+        """Valid action mask for LongShortHierarchicalLeverageEnv.
+
+        Returns:
+            Dict[str, torch.Tensor]: The computed or requested result.
+        """
         device = self._state_device()
         N, K = self.N, self.K
 
@@ -150,6 +184,14 @@ class LongShortHierarchicalLeverageEnv(LeveragedMultiCurrencyEnv):
         return {"primary": primary, "buy": buy_mask, "sell": sell_mask}
 
     def _trade(self, a) -> tuple[torch.Tensor, bool]:
+        """Trade for LongShortHierarchicalLeverageEnv.
+
+        Args:
+            a (Any): The a value.
+
+        Returns:
+            tuple[torch.Tensor, bool]: The computed or requested result.
+        """
         self.realized_cost.zero_()
         self.realized_pnl.zero_()
 
@@ -237,6 +279,34 @@ class BatchedLongShortHierarchicalLeverageEnv(BatchedLeveragedMultiCurrencyEnv):
         device: str | torch.device | None = None,
         eps: float = 1e-8,
     ):
+        """Initialize the instance.
+
+        Args:
+            B (int): The b value.
+            N (int): The n value.
+            C0 (float): The c0 value.
+            tau_p (torch.Tensor): The tau p value.
+            bankruptcy_threshold (float): The bankruptcy threshold value. Defaults to ``1.0``.
+            transaction_eps (float): The transaction eps value. Defaults to ``0.01``.
+            use_dollar_volume (bool): The use dollar volume value. Defaults to ``True``.
+            open_fee (float): The open fee value. Defaults to ``1.0``.
+            close_fee (float): The close fee value. Defaults to ``1.0``.
+            tax_rate (float): The tax rate value. Defaults to ``0.26``.
+            min_open_dollars (float): The min open dollars value. Defaults to ``10.0``.
+            val_coeff (float): The val coeff value. Defaults to ``1.0``.
+            roi_coeff (float): The roi coeff value. Defaults to ``1.0``.
+            reward_mode (str): The reward mode value. Defaults to ``'log'``.
+            size_buckets (Tuple[float, ...]): The size buckets value. Defaults to ``(0.5, 1.0)``.
+            done_reward_penalty (float): The done reward penalty value. Defaults to ``1.0``.
+            max_leverage (float): The max leverage value. Defaults to ``2.0``.
+            maintenance_margin_ratio (float | None): The maintenance margin ratio value. Defaults to ``None``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            device (str | torch.device | None): The device value. Defaults to ``None``.
+            eps (float): The eps value. Defaults to ``1e-08``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().__init__(
             B=B,
             N=N,
@@ -271,6 +341,14 @@ class BatchedLongShortHierarchicalLeverageEnv(BatchedLeveragedMultiCurrencyEnv):
         self.action_dim = self.primary_action_dim + 2 * self.K
 
     def _trade(self, actions) -> None:
+        """Trade for BatchedLongShortHierarchicalLeverageEnv.
+
+        Args:
+            actions (Any): The actions value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         device = self._state_device()
         a_d, a_q = _split_hier_actions_batched(actions, self.B, device, self.dtype)
 
@@ -304,6 +382,11 @@ class BatchedLongShortHierarchicalLeverageEnv(BatchedLeveragedMultiCurrencyEnv):
         super()._trade((base_actions, frac))
 
     def valid_action_mask(self) -> Dict[str, torch.Tensor]:
+        """Valid action mask for BatchedLongShortHierarchicalLeverageEnv.
+
+        Returns:
+            Dict[str, torch.Tensor]: The computed or requested result.
+        """
         B, N, K = self.B, self.N, self.K
         device = self._state_device()
 

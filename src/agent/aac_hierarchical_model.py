@@ -1,3 +1,4 @@
+"""Aac hierarchical model utilities for reinforcement-learning agents and training utilities."""
 import torch
 import torch.nn.functional as F
 from torch import distributions
@@ -29,9 +30,19 @@ class HierarchicalRolloutBuffer:
     """
 
     def __init__(self):
+        """Initialize the instance.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.clear()
 
     def clear(self):
+        """Clear buffered state.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states  = []
         self.actions = []   # each: (..., 2) long tensor stacking [a_d, a_q]
         self.rewards = []
@@ -42,6 +53,18 @@ class HierarchicalRolloutBuffer:
         self._has_masks = None
 
     def store(self, state, action, reward, done, mask=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            mask (Any): The mask value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states.append(state)
         self.actions.append(action)
         self.rewards.append(reward)
@@ -56,9 +79,23 @@ class HierarchicalRolloutBuffer:
             self.masks_sell.append(mask["sell"])
 
     def __len__(self):
+        """Return the number of contained items.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         return len(self.states)
 
     def to_tensors(self, device, dtype):
+        """Convert buffered values to tensors.
+
+        Args:
+            device (Any): The device value.
+            dtype (Any): The dtype value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         states  = torch.stack(self.states).to(device=device, dtype=dtype)
         actions = torch.stack(self.actions).to(device=device, dtype=torch.long)
         rewards = torch.stack(self.rewards).to(device=device, dtype=dtype)
@@ -89,10 +126,17 @@ class _HierarchicalPolicyMixin:
         masks: dict | None,
         explore: bool,
     ) -> torch.Tensor:
-        """
-        logits : (..., 1+3N+2K)
+        """logits : (..., 1+3N+2K)
         masks  : dict with 'primary' (..., 1+3N), 'buy' / 'sell' (..., N, K), or None
         returns actions (..., 2) long: [a_d, a_q]
+
+        Args:
+            logits (torch.Tensor): The logits value.
+            masks (dict | None): The masks value.
+            explore (bool): The explore value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
         """
         N = self.n_assets
         K = self.K
@@ -146,8 +190,7 @@ class _HierarchicalPolicyMixin:
         actions: torch.Tensor,
         masks: dict | None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Compute joint log-prob and mask-aware joint entropy normalised to [0, 1].
+        """Compute joint log-prob and mask-aware joint entropy normalised to [0, 1].
 
         logits  : (T, [B,] 1+3N+2K)
         actions : (T, [B,] 2) long  [a_d, a_q]
@@ -161,6 +204,14 @@ class _HierarchicalPolicyMixin:
         hierarchical policy.
 
         Returns (log_pi, entropy_routed_mean, primary_logits_masked)
+
+        Args:
+            logits (torch.Tensor): The logits value.
+            actions (torch.Tensor): The actions value.
+            masks (dict | None): The masks value.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]: The computed or requested result.
         """
         N = self.n_assets
         K = self.K
@@ -283,6 +334,27 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
     ):
+        """Initialize the instance.
+
+        Args:
+            network (dict): The network value.
+            n_assets (int): The n assets value.
+            n_buckets (int): The n buckets value.
+            gamma (float): The gamma value. Defaults to ``0.999``.
+            vf_coef (float): The vf coef value. Defaults to ``0.5``.
+            ent_coef (float): The ent coef value. Defaults to ``0.01``.
+            model_coef (float): The model coef value. Defaults to ``0.1``.
+            normalize_advantages (bool): The normalize advantages value. Defaults to ``True``.
+            advantage_type (str): The advantage type value. Defaults to ``'td0'``.
+            gae_lambda (float): The gae lambda value. Defaults to ``0.95``.
+            imagine_length (int): The imagine length value. Defaults to ``0``.
+            n_imagined_trajectories (int): The n imagined trajectories value. Defaults to ``0``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            device (str): The device value. Defaults to ``'cpu'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if advantage_type not in ("td0", "gae", "mc"):
             raise ValueError(f"advantage_type must be 'td0', 'gae', or 'mc', got '{advantage_type}'.")
         self.gamma                = gamma
@@ -316,25 +388,63 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
     # ------------------------------------------------------------------
 
     def infer_from_seq(self, state_seq, h0=None):
+        """Infer from seq for HierarchicalModelAACAgent.
+
+        Args:
+            state_seq (Any): The state seq value.
+            h0 (Any): The h0 value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if h0 is not None:
             self.net.set_states(h0, strict=False)
         return self.net.forward_seq(state_seq)
 
     def _net_states(self):
+        """Net states for HierarchicalModelAACAgent.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self.net, "get_states"):
             return None
         return self.net.get_states(clone=True, detach=True)
 
     def _set_net_states(self, states):
+        """Set the net states.
+
+        Args:
+            states (Any): The states value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if states is not None and hasattr(self.net, "set_states"):
             self.net.set_states(states, clone=True, detach=True, strict=False)
 
     def _encode_latent(self, state: torch.Tensor) -> torch.Tensor:
+        """Encode latent for HierarchicalModelAACAgent.
+
+        Args:
+            state (torch.Tensor): The state value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if hasattr(self.net, "encode_latent"):
             return self.net.encode_latent(state)
         raise AttributeError("Model-based inference requires net.encode_latent(state).")
 
     def _policy_value_from_latent(self, latent: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Policy value from latent for HierarchicalModelAACAgent.
+
+        Args:
+            latent (torch.Tensor): The latent value.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         if hasattr(self.net, "policy_value_from_latent"):
             return self.net.policy_value_from_latent(latent)
         raise AttributeError("Model-based inference requires net.policy_value_from_latent(latent).")
@@ -344,6 +454,15 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         latent: torch.Tensor,
         action: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Model step for HierarchicalModelAACAgent.
+
+        Args:
+            latent (torch.Tensor): The latent value.
+            action (torch.Tensor): The action value.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         if not hasattr(self.net, "model_step"):
             raise AttributeError("Model-based inference requires net.model_step(latent, action).")
 
@@ -391,12 +510,21 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         n_trajectories: int | None = None,
         explore_first_action: bool = True,
     ) -> dict[str, torch.Tensor]:
-        """
-        Roll out candidate trajectories through the latent model for inference.
+        """Roll out candidate trajectories through the latent model for inference.
 
         Returns a dict with first_actions, returns, rewards, dones and actions.
         No gradients are tracked and the live recurrent state is restored after
         scoring candidates.
+
+        Args:
+            state (torch.Tensor): The state value.
+            mask (dict | None): The mask value. Defaults to ``None``.
+            length (int | None): The length value. Defaults to ``None``.
+            n_trajectories (int | None): The n trajectories value. Defaults to ``None``.
+            explore_first_action (bool): The explore first action value. Defaults to ``True``.
+
+        Returns:
+            dict[str, torch.Tensor]: The computed or requested result.
         """
         length = self.imagine_length if length is None else int(length)
         n_trajectories = self.n_imagined_trajectories if n_trajectories is None else int(n_trajectories)
@@ -479,6 +607,17 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         explore_first_action: bool = True,
         advance_state: bool = True,
     ) -> torch.Tensor:
+        """Act imagined for HierarchicalModelAACAgent.
+
+        Args:
+            state (torch.Tensor): The state value.
+            mask (dict | None): The mask value. Defaults to ``None``.
+            explore_first_action (bool): The explore first action value. Defaults to ``True``.
+            advance_state (bool): The advance state value. Defaults to ``True``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         rollouts = self.imagine_rollouts(
             state,
             mask=mask,
@@ -500,6 +639,18 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         grad_enabled: bool = False,
         use_imagination: bool = False,
     ) -> torch.Tensor:
+        """Act for HierarchicalModelAACAgent.
+
+        Args:
+            state (torch.Tensor): The state value.
+            mask (dict | None): The mask value. Defaults to ``None``.
+            explore (bool): The explore value. Defaults to ``False``.
+            grad_enabled (bool): The grad enabled value. Defaults to ``False``.
+            use_imagination (bool): The use imagination value. Defaults to ``False``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if use_imagination:
             if grad_enabled:
                 raise ValueError("Imagined action selection is inference-only; use grad_enabled=False.")
@@ -519,13 +670,43 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         return action.cpu()
 
     def store(self, state, action, reward, done, mask=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            mask (Any): The mask value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.buffer.store(state, action, reward, done, mask=mask)
 
     def init_optimizer(self, lr, optim="AdamW"):
+        """Init optimizer for HierarchicalModelAACAgent.
+
+        Args:
+            lr (Any): The lr value.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         opt_cls    = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
     def compute_advantages(self, last_next_state: torch.Tensor, h0=None):
+        """Compute the advantages.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (Any): The h0 value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         states, actions, rewards, dones, masks = self.buffer.to_tensors(self.device, self.dtype)
         rewards = rewards.squeeze(-1) if rewards.dim() > actions.dim() - 1 else rewards
         dones   = dones.squeeze(-1)   if dones.dim()   > actions.dim() - 1 else dones
@@ -556,6 +737,17 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         return advantages, raw_adv, returns, states, actions, masks
 
     def model_prediction_loss(self, states: torch.Tensor, actions: torch.Tensor, last_next_state: torch.Tensor, h0=None):
+        """Model prediction loss for HierarchicalModelAACAgent.
+
+        Args:
+            states (torch.Tensor): The states value.
+            actions (torch.Tensor): The actions value.
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (Any): The h0 value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not all(hasattr(self.net, name) for name in ("encode", "model_seq")):
             return torch.zeros((), dtype=self.dtype, device=self.device)
 
@@ -578,6 +770,16 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         h0: dict | None = None,
         max_grad_norm: float | None = None,
     ) -> dict[str, list[float]]:
+        """Apply one update step.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (dict | None): The h0 value. Defaults to ``None``.
+            max_grad_norm (float | None): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            dict[str, list[float]]: The computed or requested result.
+        """
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
         if len(self.buffer) == 0:
@@ -623,9 +825,26 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         return metrics
 
     def save(self, path: str):
+        """Save for HierarchicalModelAACAgent.
+
+        Args:
+            path (str): The path value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         torch.save({"network": self.net.state_dict()}, path)
 
     def load(self, path: str, strict: bool = True):
+        """Load for HierarchicalModelAACAgent.
+
+        Args:
+            path (str): The path value.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         ckpt = torch.load(path, map_location=self.device)
         self.net.load_state_dict(ckpt["network"], strict=strict)
 
@@ -654,6 +873,30 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         times=None,
         open_=None,
     ):
+        """Train on historical for HierarchicalModelAACAgent.
+
+        Args:
+            env (Any): The env value.
+            data (Any): The data value.
+            n_episodes (Any): The n episodes value.
+            max_steps (Any): The max steps value. Defaults to ``2000``.
+            warm_up (Any): The warm up value. Defaults to ``0``.
+            update_interval (Any): The update interval value. Defaults to ``100``.
+            burn_in_updates (Any): The burn in updates value. Defaults to ``0``.
+            lr (Any): The lr value. Defaults to ``0.0003``.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
+            store_results (Any): The store results value. Defaults to ``True``.
+            max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
+            high (Any): The high value. Defaults to ``None``.
+            low (Any): The low value. Defaults to ``None``.
+            volume (Any): The volume value. Defaults to ``None``.
+            times (Any): The times value. Defaults to ``None``.
+            open_ (Any): The open value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 
@@ -758,7 +1001,7 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
     def train_on_historical_bat(
         self,
         bat_env,
-        open_, close, high, low, volume, times, 
+        open_, close, high, low, volume, times,
         n_episodes,
         max_steps=2000,
         warm_up=0,
@@ -770,6 +1013,30 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         store_results=True,
         max_grad_norm=None,
     ):
+        """Train on historical bat for HierarchicalModelAACAgent.
+
+        Args:
+            bat_env (Any): The bat env value.
+            open_ (Any): The open value.
+            close (Any): The close value.
+            high (Any): The high value.
+            low (Any): The low value.
+            volume (Any): The volume value.
+            times (Any): The times value.
+            n_episodes (Any): The n episodes value.
+            max_steps (Any): The max steps value. Defaults to ``2000``.
+            warm_up (Any): The warm up value. Defaults to ``0``.
+            update_interval (Any): The update interval value. Defaults to ``100``.
+            burn_in_updates (Any): The burn in updates value. Defaults to ``1``.
+            lr (Any): The lr value. Defaults to ``0.0003``.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
+            store_results (Any): The store results value. Defaults to ``True``.
+            max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 

@@ -1,3 +1,4 @@
+"""Ppo hierarchical utilities for reinforcement-learning agents and training utilities."""
 import torch
 
 from src.agent.aac_hierarchical import (
@@ -17,14 +18,41 @@ class HierarchicalPPORolloutBuffer(HierarchicalRolloutBuffer):
     """Hierarchical rollout buffer with old log-probs for PPO ratios."""
 
     def clear(self):
+        """Clear buffered state.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().clear()
         self.log_probs = []
 
     def store(self, state, action, log_prob, reward, done, mask=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            log_prob (Any): The log prob value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            mask (Any): The mask value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         super().store(state, action, reward, done, mask=mask)
         self.log_probs.append(log_prob)
 
     def to_tensors(self, device, dtype):
+        """Convert buffered values to tensors.
+
+        Args:
+            device (Any): The device value.
+            dtype (Any): The dtype value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         states, actions, rewards, dones, masks = super().to_tensors(device, dtype)
         log_probs = torch.stack(self.log_probs).to(device=device, dtype=dtype)
         return states, actions, log_probs, rewards, dones, masks
@@ -48,6 +76,25 @@ class HierarchicalPPOAgent(_HierarchicalPolicyMixin):
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
     ):
+        """Initialize the instance.
+
+        Args:
+            network (dict): The network value.
+            n_assets (int): The n assets value.
+            n_buckets (int): The n buckets value.
+            gamma (float): The gamma value. Defaults to ``0.999``.
+            eps_clip (float): The eps clip value. Defaults to ``0.2``.
+            vf_coef (float): The vf coef value. Defaults to ``0.5``.
+            ent_coef (float): The ent coef value. Defaults to ``0.01``.
+            normalize_advantages (bool): The normalize advantages value. Defaults to ``True``.
+            advantage_type (str): The advantage type value. Defaults to ``'gae'``.
+            gae_lambda (float): The gae lambda value. Defaults to ``0.95``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            device (str): The device value. Defaults to ``'cpu'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         if advantage_type not in ("td0", "gae", "mc"):
             raise ValueError(f"advantage_type must be 'td0', 'gae', or 'mc', got '{advantage_type}'.")
         self.gamma = gamma
@@ -74,6 +121,17 @@ class HierarchicalPPOAgent(_HierarchicalPolicyMixin):
         self.net.reset(1)
 
     def act(self, state: torch.Tensor, mask: dict | None = None, explore: bool = False, grad_enabled: bool = False):
+        """Act for HierarchicalPPOAgent.
+
+        Args:
+            state (torch.Tensor): The state value.
+            mask (dict | None): The mask value. Defaults to ``None``.
+            explore (bool): The explore value. Defaults to ``False``.
+            grad_enabled (bool): The grad enabled value. Defaults to ``False``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         with torch.set_grad_enabled(grad_enabled):
             state = state.to(dtype=self.dtype, device=self.device)
             logits, _ = self.net(state)
@@ -85,18 +143,58 @@ class HierarchicalPPOAgent(_HierarchicalPolicyMixin):
         return action.cpu(), log_prob.cpu()
 
     def store(self, state, action, log_prob, reward, done, mask=None):
+        """Store one transition or payload in the buffer.
+
+        Args:
+            state (Any): The state value.
+            action (Any): The action value.
+            log_prob (Any): The log prob value.
+            reward (Any): The reward value.
+            done (Any): The done value.
+            mask (Any): The mask value. Defaults to ``None``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.buffer.store(state, action, log_prob, reward, done, mask=mask)
 
     def init_optimizer(self, lr, optim="AdamW"):
+        """Init optimizer for HierarchicalPPOAgent.
+
+        Args:
+            lr (Any): The lr value.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         opt_cls = torch.optim.AdamW if optim.lower() == "adamw" else torch.optim.Adam
         self.optim = opt_cls(self.net.parameters(), lr=lr)
 
     def infer_from_seq(self, state_seq, h0=None):
+        """Infer from seq for HierarchicalPPOAgent.
+
+        Args:
+            state_seq (Any): The state seq value.
+            h0 (Any): The h0 value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if h0 is not None:
             self.net.set_states(h0, strict=False)
         return self.net.forward_seq(state_seq)
 
     def compute_advantages(self, last_next_state: torch.Tensor, h0=None):
+        """Compute the advantages.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            h0 (Any): The h0 value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         states, actions, old_log_probs, rewards, dones, masks = self.buffer.to_tensors(self.device, self.dtype)
         rewards = rewards.squeeze(-1) if rewards.dim() > actions.dim() - 1 else rewards
         dones = dones.squeeze(-1) if dones.dim() > actions.dim() - 1 else dones
@@ -123,6 +221,17 @@ class HierarchicalPPOAgent(_HierarchicalPolicyMixin):
         return advantages, raw_adv, returns, states, actions, old_log_probs, masks
 
     def update(self, last_next_state: torch.Tensor, k_epochs: int = 4, h0=None, max_grad_norm: float | None = None):
+        """Apply one update step.
+
+        Args:
+            last_next_state (torch.Tensor): The last next state value.
+            k_epochs (int): The k epochs value. Defaults to ``4``.
+            h0 (Any): The h0 value. Defaults to ``None``.
+            max_grad_norm (float | None): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or self.optim is None:
             raise RuntimeError("Call init_optimizer(...) before update().")
         if len(self.buffer) == 0:
@@ -165,9 +274,26 @@ class HierarchicalPPOAgent(_HierarchicalPolicyMixin):
         return metrics
 
     def save(self, path: str):
+        """Save for HierarchicalPPOAgent.
+
+        Args:
+            path (str): The path value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         torch.save({"network": self.net.state_dict()}, path)
 
     def load(self, path: str, strict: bool = True):
+        """Load for HierarchicalPPOAgent.
+
+        Args:
+            path (str): The path value.
+            strict (bool): The strict value. Defaults to ``True``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         ckpt = torch.load(path, map_location=self.device)
         self.net.load_state_dict(ckpt["network"], strict=strict)
 
@@ -187,6 +313,31 @@ class HierarchicalPPOAgent(_HierarchicalPolicyMixin):
         store_results=True,
         max_grad_norm=None,
     ):
+        """Train on historical bat for HierarchicalPPOAgent.
+
+        Args:
+            bat_env (Any): The bat env value.
+            open_ (Any): The open value.
+            close (Any): The close value.
+            high (Any): The high value.
+            low (Any): The low value.
+            volume (Any): The volume value.
+            times (Any): The times value.
+            n_episodes (Any): The n episodes value.
+            max_steps (Any): The max steps value. Defaults to ``2000``.
+            warm_up (Any): The warm up value. Defaults to ``0``.
+            update_interval (Any): The update interval value. Defaults to ``100``.
+            n_updates (Any): The n updates value. Defaults to ``4``.
+            burn_in_updates (Any): The burn in updates value. Defaults to ``1``.
+            lr (Any): The lr value. Defaults to ``0.0003``.
+            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
+            store_results (Any): The store results value. Defaults to ``True``.
+            max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         if not hasattr(self, "optim") or init_optimizer:
             self.init_optimizer(lr, optim=optim)
 

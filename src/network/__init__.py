@@ -1,3 +1,4 @@
+"""Package exports for src.network, covering neural network architectures and reusable model components."""
 from src.network.action_q import ActionQNetwork
 from src.network.action_value import ActionValueNetwork
 from src.network.attention_memory_action_value import AttentionMemoryActionValueNetwork

@@ -1,3 +1,4 @@
+"""Main utilities for news collection, tagging, deduplication, and storage utilities."""
 from __future__ import annotations
 
 import sys

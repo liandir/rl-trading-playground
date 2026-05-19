@@ -1,3 +1,4 @@
+"""Discrete log utilities for trading environment state, action, reward, and simulation logic."""
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
@@ -13,6 +14,7 @@ PI = 3.141592653589793238462
 
 @dataclass
 class State:
+    """State implementation for trading environment state, action, reward, and simulation logic."""
     time:      torch.Tensor   # [6]      cyclic time encoding
     log_ret:   torch.Tensor   # [N]      log(p_t / p_{t-1}) — per-step log-return
     close_loc: torch.Tensor   # [N]      (close - low) / (high - low) — close position within bar
@@ -27,6 +29,11 @@ class State:
     unrl_rel:  torch.Tensor   # [N]      unrealized after-tax PnL / invested (0 if no position)
 
     def to_tensor(self) -> torch.Tensor:
+        """Convert the value to tensor.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.cat([
             self.time.flatten(),
             self.log_ret.flatten(),
@@ -44,13 +51,32 @@ class State:
 
 
 class StateHistory:
+    """StateHistory implementation for trading environment state, action, reward, and simulation logic."""
     def __init__(self):
+        """Initialize the instance.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states: list[State] = []
 
     def append(self, state: State):
+        """Append for StateHistory.
+
+        Args:
+            state (State): The state value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.states.append(state)
 
     def to_tensor(self) -> torch.Tensor:
+        """Convert the value to tensor.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return torch.stack([s.to_tensor() for s in self.states])
 
 
@@ -108,6 +134,30 @@ class MultiCurrencyEnv:
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
     ):
+        """Initialize the instance.
+
+        Args:
+            N (int): The n value.
+            C0 (float): The c0 value.
+            tau_p (torch.Tensor): The tau p value.
+            bankruptcy_threshold (float): The bankruptcy threshold value. Defaults to ``1.0``.
+            transaction_eps (float): The transaction eps value. Defaults to ``0.01``.
+            use_dollar_volume (bool): The use dollar volume value. Defaults to ``True``.
+            save_history (bool): The save history value. Defaults to ``False``.
+            sell_fee (float): The sell fee value. Defaults to ``1.0``.
+            buy_fee (float): The buy fee value. Defaults to ``1.0``.
+            tax_rate (float): The tax rate value. Defaults to ``0.26``.
+            min_buy_dollars (float): The min buy dollars value. Defaults to ``10.0``.
+            val_coeff (float): The val coeff value. Defaults to ``1.0``.
+            roi_coeff (float): The roi coeff value. Defaults to ``10.0``.
+            reward_mode (str): The reward mode value. Defaults to ``'log'``.
+            done_reward_penalty (float): The done reward penalty value. Defaults to ``10.0``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            eps (float): The eps value. Defaults to ``1e-08``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         assert isinstance(N, int) and N > 0
         assert tau_p.ndim == 1 and tau_p.numel() > 0
         assert min_buy_dollars >= buy_fee
@@ -153,14 +203,35 @@ class MultiCurrencyEnv:
     # -------------------------------------------------------------------------
 
     def encode_hold(self) -> int:
+        """Encode hold for MultiCurrencyEnv.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 0
 
     def encode_asset(self, asset_idx: int) -> int:
+        """Encode asset for MultiCurrencyEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         if not (0 <= asset_idx < self.N):
             raise ValueError("asset_idx out of range")
         return 1 + asset_idx
 
     def decode_action(self, action_idx: int) -> tuple[str, int | None]:
+        """Decode action for MultiCurrencyEnv.
+
+        Args:
+            action_idx (int): The action idx value.
+
+        Returns:
+            tuple[str, int | None]: The computed or requested result.
+        """
         if action_idx == 0:
             return ("hold", None)
         if 1 <= action_idx <= self.N:
@@ -168,6 +239,11 @@ class MultiCurrencyEnv:
         raise ValueError(f"invalid action index {action_idx}")
 
     def valid_action_mask(self) -> torch.Tensor:
+        """Valid action mask for MultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         mask = torch.zeros(self.action_dim, dtype=torch.bool)
         mask[0] = True
 
@@ -191,6 +267,11 @@ class MultiCurrencyEnv:
 
     @property
     def V(self) -> torch.Tensor:
+        """V for MultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return self.C + torch.sum(self.w * self.p)
 
     # -------------------------------------------------------------------------
@@ -198,6 +279,11 @@ class MultiCurrencyEnv:
     # -------------------------------------------------------------------------
 
     def _compute_time_vector(self) -> torch.Tensor:
+        """Compute the time vector.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         dt_obj      = datetime.fromtimestamp(self.t)
         iso         = dt_obj.isocalendar()
         total_weeks = datetime(dt_obj.year, 12, 28).isocalendar().week
@@ -208,14 +294,29 @@ class MultiCurrencyEnv:
         return torch.cat([torch.sin(2 * PI * angles), torch.cos(2 * PI * angles)])
 
     def _compute_value_weights(self) -> torch.Tensor:
+        """Compute the value weights.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         V = self.V.clamp(min=self.eps)
         return torch.cat([(self.C / V)[None], (self.w * self.p) / V])
 
     def _compute_rho(self) -> torch.Tensor:
+        """Compute the rho.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         S = self.invested.sum()
         return S / (S + self.C + self.eps)
 
     def _compute_unrl_rel(self) -> torch.Tensor:
+        """Compute the unrl rel.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         has      = self.invested > self.eps
         avg_cost = torch.zeros_like(self.invested)
         avg_cost[has] = self.invested[has] / self.w[has].clamp(min=self.eps)
@@ -227,6 +328,11 @@ class MultiCurrencyEnv:
         return unrl_rel
 
     def _get_state(self) -> State:
+        """Return the current state snapshot.
+
+        Returns:
+            State: The computed or requested result.
+        """
         has_pos = (self.w > self.eps).to(self.dtype)
         return State(
             time      = self._compute_time_vector(),
@@ -248,6 +354,15 @@ class MultiCurrencyEnv:
     # -------------------------------------------------------------------------
 
     def reset(self, data: dict, C0: Optional[float] = None) -> State:
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            data (dict): The data value.
+            C0 (Optional[float]): The c0 value. Defaults to ``None``.
+
+        Returns:
+            State: The computed or requested result.
+        """
         if C0 is not None:
             self.C0 = float(C0)
 
@@ -290,9 +405,26 @@ class MultiCurrencyEnv:
         return state
 
     def _hl_rel_single(self, high: torch.Tensor, low: torch.Tensor) -> torch.Tensor:
+        """Hl rel single for MultiCurrencyEnv.
+
+        Args:
+            high (torch.Tensor): The high value.
+            low (torch.Tensor): The low value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return 2.0 * (high - low) / (high + low + self.eps)
 
     def _get_market_inputs(self, data: dict):
+        """Return the market inputs.
+
+        Args:
+            data (dict): The data value.
+
+        Returns:
+            Any: The computed or requested result.
+        """
         for key in ("close", "high", "low", "volume"):
             if key not in data:
                 raise KeyError(f"data must contain '{key}'")
@@ -306,6 +438,14 @@ class MultiCurrencyEnv:
         return float(data["time"]), close, high, low, volume
 
     def _update(self, data: dict) -> None:
+        """Apply one update step.
+
+        Args:
+            data (dict): The data value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.V_prev = self.V.detach().clone()
 
         t_new, close, high, low, volume = self._get_market_inputs(data)
@@ -354,6 +494,14 @@ class MultiCurrencyEnv:
     # -------------------------------------------------------------------------
 
     def _trade(self, a: int | torch.Tensor | None) -> tuple[torch.Tensor, bool]:
+        """Trade for MultiCurrencyEnv.
+
+        Args:
+            a (int | torch.Tensor | None): The a value.
+
+        Returns:
+            tuple[torch.Tensor, bool]: The computed or requested result.
+        """
         self.realized_cost.zero_()
         self.realized_pnl.zero_()
 
@@ -430,6 +578,11 @@ class MultiCurrencyEnv:
     # -------------------------------------------------------------------------
 
     def _reward(self) -> float:
+        """Reward for MultiCurrencyEnv.
+
+        Returns:
+            float: The computed or requested result.
+        """
         if self.realized_cost.sum() > self.eps:
             return float(
                 self.roi_coeff * (self.realized_pnl.sum() / self.realized_cost.sum()).item()
@@ -443,6 +596,15 @@ class MultiCurrencyEnv:
     # -------------------------------------------------------------------------
 
     def step(self, a: int | torch.Tensor | None, data: dict) -> Tuple[State, float, bool, Dict]:
+        """Advance the simulation by one step.
+
+        Args:
+            a (int | torch.Tensor | None): The a value.
+            data (dict): The data value.
+
+        Returns:
+            Tuple[State, float, bool, Dict]: The computed or requested result.
+        """
         action_info, valid_trade = self._trade(a)
         self._update(data)
         reward = self._reward()
@@ -514,6 +676,30 @@ class BatchedMultiCurrencyEnv:
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
     ):
+        """Initialize the instance.
+
+        Args:
+            B (int): The b value.
+            N (int): The n value.
+            C0 (float): The c0 value.
+            tau_p (torch.Tensor): The tau p value.
+            bankruptcy_threshold (float): The bankruptcy threshold value. Defaults to ``1.0``.
+            transaction_eps (float): The transaction eps value. Defaults to ``0.01``.
+            use_dollar_volume (bool): The use dollar volume value. Defaults to ``True``.
+            sell_fee (float): The sell fee value. Defaults to ``1.0``.
+            buy_fee (float): The buy fee value. Defaults to ``1.0``.
+            tax_rate (float): The tax rate value. Defaults to ``0.26``.
+            min_buy_dollars (float): The min buy dollars value. Defaults to ``10.0``.
+            val_coeff (float): The val coeff value. Defaults to ``1.0``.
+            roi_coeff (float): The roi coeff value. Defaults to ``10.0``.
+            reward_mode (str): The reward mode value. Defaults to ``'log'``.
+            done_reward_penalty (float): The done reward penalty value. Defaults to ``10.0``.
+            dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
+            eps (float): The eps value. Defaults to ``1e-08``.
+
+        Returns:
+            None: This function does not return a value.
+        """
         assert isinstance(B, int) and B > 0
         assert isinstance(N, int) and N > 0
         assert tau_p.ndim == 1 and tau_p.numel() > 0
@@ -560,9 +746,22 @@ class BatchedMultiCurrencyEnv:
     # -------------------------------------------------------------------------
 
     def encode_hold(self) -> int:
+        """Encode hold for BatchedMultiCurrencyEnv.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 0
 
     def encode_asset(self, asset_idx: int) -> int:
+        """Encode asset for BatchedMultiCurrencyEnv.
+
+        Args:
+            asset_idx (int): The asset idx value.
+
+        Returns:
+            int: The computed or requested result.
+        """
         return 1 + asset_idx
 
     # -------------------------------------------------------------------------
@@ -571,6 +770,11 @@ class BatchedMultiCurrencyEnv:
 
     @property
     def V(self) -> torch.Tensor:   # (B,)
+        """V for BatchedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return self.C + (self.w * self.p).sum(dim=-1)
 
     # -------------------------------------------------------------------------
@@ -586,6 +790,19 @@ class BatchedMultiCurrencyEnv:
         time:   torch.Tensor,   # (B,)
         C0: Optional[float] = None,
     ) -> torch.Tensor:
+        """Reset internal state for a new episode or stream.
+
+        Args:
+            close (torch.Tensor): The close value.
+            high (torch.Tensor): The high value.
+            low (torch.Tensor): The low value.
+            volume (torch.Tensor): The volume value.
+            time (torch.Tensor): The time value.
+            C0 (Optional[float]): The c0 value. Defaults to ``None``.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         if C0 is not None:
             self.C0 = float(C0)
 
@@ -631,10 +848,23 @@ class BatchedMultiCurrencyEnv:
     # -------------------------------------------------------------------------
 
     def _hl_rel(self, high: torch.Tensor, low: torch.Tensor) -> torch.Tensor:
+        """Hl rel for BatchedMultiCurrencyEnv.
+
+        Args:
+            high (torch.Tensor): The high value.
+            low (torch.Tensor): The low value.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         return 2.0 * (high - low) / (high + low + self.eps)
 
     def _time_features(self) -> torch.Tensor:
-        """(B, 6) cyclic time features."""
+        """(B, 6) cyclic time features.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         features = []
         for ts in self.t.tolist():
             dt_obj      = datetime.fromtimestamp(ts)
@@ -648,6 +878,11 @@ class BatchedMultiCurrencyEnv:
         return torch.stack(features)   # (B, 6)
 
     def _obs(self) -> torch.Tensor:
+        """Obs for BatchedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B, N = self.B, self.N
         V    = self.V.clamp(min=self.eps)          # (B,)
 
@@ -696,6 +931,18 @@ class BatchedMultiCurrencyEnv:
         volume: torch.Tensor,   # (B, N)
         time:   torch.Tensor,   # (B,)
     ) -> None:
+        """Apply one update step.
+
+        Args:
+            close (torch.Tensor): The close value.
+            high (torch.Tensor): The high value.
+            low (torch.Tensor): The low value.
+            volume (torch.Tensor): The volume value.
+            time (torch.Tensor): The time value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         self.V_prev = self.V.detach().clone()
 
         close  = close.to(self.dtype)
@@ -750,6 +997,14 @@ class BatchedMultiCurrencyEnv:
         )
 
     def _trade(self, actions: torch.Tensor) -> None:
+        """Trade for BatchedMultiCurrencyEnv.
+
+        Args:
+            actions (torch.Tensor): The actions value.
+
+        Returns:
+            None: This function does not return a value.
+        """
         B, N = self.B, self.N
         b = self._b_idx
 
@@ -801,6 +1056,11 @@ class BatchedMultiCurrencyEnv:
         self.C        = self.C.clamp(min=0.0)
 
     def _reward(self) -> torch.Tensor:
+        """Reward for BatchedMultiCurrencyEnv.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         has_realized = self.realized_cost.sum(dim=1) > self.eps
         roi = self.realized_pnl.sum(dim=1) / self.realized_cost.sum(dim=1).clamp(min=self.eps)
         V   = self.V
@@ -819,7 +1079,19 @@ class BatchedMultiCurrencyEnv:
         volume:  torch.Tensor,  # (B, N)
         time:    torch.Tensor,  # (B,)
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Returns obs (B, state_dim), rewards (B,), dones (B,)."""
+        """Returns obs (B, state_dim), rewards (B,), dones (B,).
+
+        Args:
+            actions (torch.Tensor): The actions value.
+            close (torch.Tensor): The close value.
+            high (torch.Tensor): The high value.
+            low (torch.Tensor): The low value.
+            volume (torch.Tensor): The volume value.
+            time (torch.Tensor): The time value.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: The computed or requested result.
+        """
         self._trade(actions)
         self._update(close, high, low, volume, time)
         rewards = self._reward()
@@ -828,7 +1100,11 @@ class BatchedMultiCurrencyEnv:
         return self._obs(), rewards, dones
 
     def valid_action_mask(self) -> torch.Tensor:
-        """Returns (B, action_dim) bool tensor."""
+        """Returns (B, action_dim) bool tensor.
+
+        Returns:
+            torch.Tensor: The computed or requested result.
+        """
         B, N = self.B, self.N
         mask = torch.zeros(B, self.action_dim, dtype=torch.bool)
         mask[:, 0] = True
