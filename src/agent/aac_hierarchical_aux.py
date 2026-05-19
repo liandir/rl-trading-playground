@@ -25,7 +25,7 @@ from src.network import build_network
 class AuxiliaryHierarchicalRolloutBuffer(HierarchicalRolloutBuffer):
     """Hierarchical rollout buffer with optional per-step auxiliary targets."""
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear buffered state.
 
         Returns:
@@ -35,7 +35,7 @@ class AuxiliaryHierarchicalRolloutBuffer(HierarchicalRolloutBuffer):
         self.aux_targets = []
         self._has_aux_targets = None
 
-    def store(self, state, action, reward, done, mask=None, aux_target=None):
+    def store(self, state, action, reward, done, mask=None, aux_target=None) -> None:
         """Store one transition or payload in the buffer.
 
         Args:
@@ -96,7 +96,7 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         gae_lambda: float = 0.95,
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -180,7 +180,7 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
             action = self._sample_hierarchical(logits, mask_dev, explore)
         return action if grad_enabled else action.cpu()
 
-    def store(self, state, action, reward, done, mask=None, aux_target=None):
+    def store(self, state, action, reward, done, mask=None, aux_target=None) -> None:
         """Store one transition or payload in the buffer.
 
         Args:
@@ -196,12 +196,12 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         """
         self.buffer.store(state, action, reward, done, mask=mask, aux_target=aux_target)
 
-    def init_optimizer(self, lr, optim="AdamW"):
+    def init_optimizer(self, lr, optim: str = "AdamW") -> None:
         """Init optimizer for HierarchicalAuxAACAgent.
 
         Args:
             lr (Any): The lr value.
-            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            optim (str): The optim value. Defaults to ``'AdamW'``.
 
         Returns:
             None: This function does not return a value.
@@ -299,7 +299,7 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
             metrics.setdefault(name, []).append(float(value.detach().cpu().item()))
         return metrics
 
-    def save(self, path: str):
+    def save(self, path: str) -> None:
         """Save for HierarchicalAuxAACAgent.
 
         Args:
@@ -310,7 +310,7 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         """
         torch.save({"network": self.net.state_dict()}, path)
 
-    def load(self, path: str, strict: bool = True):
+    def load(self, path: str, strict: bool = True) -> None:
         """Load for HierarchicalAuxAACAgent.
 
         Args:
@@ -328,14 +328,14 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         env,
         data,
         n_episodes,
-        max_steps=2000,
-        warm_up=0,
-        update_interval=100,
-        burn_in_updates=0,
-        lr=3e-4,
-        optim="AdamW",
-        init_optimizer=False,
-        store_results=True,
+        max_steps: int = 2000,
+        warm_up: int = 0,
+        update_interval: int = 100,
+        burn_in_updates: int = 0,
+        lr: float = 3e-4,
+        optim: str = "AdamW",
+        init_optimizer: bool = False,
+        store_results: bool = True,
         max_grad_norm=None,
         *,
         open_=None,
@@ -350,14 +350,14 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
             env (Any): The env value.
             data (Any): The data value.
             n_episodes (Any): The n episodes value.
-            max_steps (Any): The max steps value. Defaults to ``2000``.
-            warm_up (Any): The warm up value. Defaults to ``0``.
-            update_interval (Any): The update interval value. Defaults to ``100``.
-            burn_in_updates (Any): The burn in updates value. Defaults to ``0``.
-            lr (Any): The lr value. Defaults to ``0.0003``.
-            optim (Any): The optim value. Defaults to ``'AdamW'``.
-            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
-            store_results (Any): The store results value. Defaults to ``True``.
+            max_steps (int): The max steps value. Defaults to ``2000``.
+            warm_up (int): The warm up value. Defaults to ``0``.
+            update_interval (int): The update interval value. Defaults to ``100``.
+            burn_in_updates (int): The burn in updates value. Defaults to ``0``.
+            lr (float): The lr value. Defaults to ``0.0003``.
+            optim (str): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (bool): The init optimizer value. Defaults to ``False``.
+            store_results (bool): The store results value. Defaults to ``True``.
             max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
             open_ (Any): The open value. Defaults to ``None``.
             high (Any): The high value. Defaults to ``None``.
@@ -469,14 +469,14 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
         bat_env,
         open_, close, high, low, volume, times,
         n_episodes,
-        max_steps=2000,
-        warm_up=0,
-        update_interval=100,
-        burn_in_updates=1,
-        lr=3e-4,
-        optim="AdamW",
-        init_optimizer=False,
-        store_results=True,
+        max_steps: int = 2000,
+        warm_up: int = 0,
+        update_interval: int = 100,
+        burn_in_updates: int = 1,
+        lr: float = 3e-4,
+        optim: str = "AdamW",
+        init_optimizer: bool = False,
+        store_results: bool = True,
         max_grad_norm=None,
     ):
         """Train on historical bat for HierarchicalAuxAACAgent.
@@ -490,14 +490,14 @@ class HierarchicalAuxAACAgent(_HierarchicalPolicyMixin):
             volume (Any): The volume value.
             times (Any): The times value.
             n_episodes (Any): The n episodes value.
-            max_steps (Any): The max steps value. Defaults to ``2000``.
-            warm_up (Any): The warm up value. Defaults to ``0``.
-            update_interval (Any): The update interval value. Defaults to ``100``.
-            burn_in_updates (Any): The burn in updates value. Defaults to ``1``.
-            lr (Any): The lr value. Defaults to ``0.0003``.
-            optim (Any): The optim value. Defaults to ``'AdamW'``.
-            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
-            store_results (Any): The store results value. Defaults to ``True``.
+            max_steps (int): The max steps value. Defaults to ``2000``.
+            warm_up (int): The warm up value. Defaults to ``0``.
+            update_interval (int): The update interval value. Defaults to ``100``.
+            burn_in_updates (int): The burn in updates value. Defaults to ``1``.
+            lr (float): The lr value. Defaults to ``0.0003``.
+            optim (str): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (bool): The init optimizer value. Defaults to ``False``.
+            store_results (bool): The store results value. Defaults to ``True``.
             max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
 
         Returns:

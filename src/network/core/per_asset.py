@@ -1,4 +1,5 @@
 """Per asset utilities for neural network architectures and reusable model components."""
+from collections.abc import Callable
 import torch
 
 from src.network.core.recurrent import RecurrentNetwork, _build_recurrent_cell
@@ -73,11 +74,11 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
         hidden_dims_actor=None,
         hidden_dims_value=None,
         combine_mode: str = "concat",
-        activation=torch.tanh,
-        recurrent_activation=torch.tanh,
+        activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
+        recurrent_activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -94,8 +95,8 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
             hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
             hidden_dims_value (Any): The hidden dims value value. Defaults to ``None``.
             combine_mode (str): The combine mode value. Defaults to ``'concat'``.
-            activation (Any): The activation value. Defaults to ``torch.tanh``.
-            recurrent_activation (Any): The recurrent activation value. Defaults to ``torch.tanh``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.tanh``.
+            recurrent_activation (Callable[[torch.Tensor], torch.Tensor]): The recurrent activation value. Defaults to ``torch.tanh``.
             recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
             recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
 
@@ -199,7 +200,7 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
             return h_mem + h_ff
         return torch.cat([h_mem, h_ff], dim=-1)
 
-    def reset(self, batch_size: int = 1):
+    def reset(self, batch_size: int = 1) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -293,7 +294,7 @@ class BaseFlatPerAssetActionValueNetwork(torch.nn.Module):
             rec_state = self.recurrent.get_state(clone=clone, detach=detach)
         return {"recurrent": rec_state}
 
-    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:

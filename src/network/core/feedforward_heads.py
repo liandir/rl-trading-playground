@@ -1,4 +1,5 @@
 """Feedforward heads utilities for neural network architectures and reusable model components."""
+from collections.abc import Callable
 import torch
 
 from src.network.core.vanilla import VanillaNetwork
@@ -26,8 +27,8 @@ class FeedForwardActionValueNetwork(torch.nn.Module):
         hidden_dims=None,
         hidden_dims_actor=None,
         hidden_dims_value=None,
-        activation=torch.relu,
-    ):
+        activation: Callable[[torch.Tensor], torch.Tensor] = torch.relu,
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -36,7 +37,7 @@ class FeedForwardActionValueNetwork(torch.nn.Module):
             hidden_dims (Any): The hidden dims value. Defaults to ``None``.
             hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
             hidden_dims_value (Any): The hidden dims value value. Defaults to ``None``.
-            activation (Any): The activation value. Defaults to ``torch.relu``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.relu``.
 
         Returns:
             None: This function does not return a value.
@@ -76,7 +77,7 @@ class FeedForwardActionValueNetwork(torch.nn.Module):
         values = self.value(z).squeeze(-1).view(*shape[:-1])
         return logits, values
 
-    def reset(self, batch_size: int = 1):
+    def reset(self, batch_size: int = 1) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -110,7 +111,7 @@ class FeedForwardActionValueNetwork(torch.nn.Module):
         """
         return {}
 
-    def set_states(self, states: dict | None, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_states(self, states: dict | None, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:
@@ -147,8 +148,8 @@ class FeedForwardActionQNetwork(torch.nn.Module):
         hidden_dims=None,
         hidden_dims_actor=None,
         hidden_dims_q=None,
-        activation=torch.relu,
-    ):
+        activation: Callable[[torch.Tensor], torch.Tensor] = torch.relu,
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -157,7 +158,7 @@ class FeedForwardActionQNetwork(torch.nn.Module):
             hidden_dims (Any): The hidden dims value. Defaults to ``None``.
             hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
             hidden_dims_q (Any): The hidden dims q value. Defaults to ``None``.
-            activation (Any): The activation value. Defaults to ``torch.relu``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.relu``.
 
         Returns:
             None: This function does not return a value.
@@ -207,7 +208,7 @@ class FeedForwardActionQNetwork(torch.nn.Module):
         q_values = self.q_head(z).view(*shape[:-1], self.action_dim)
         return logits, q_values
 
-    def reset(self, batch_size: int = 1):
+    def reset(self, batch_size: int = 1) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -241,7 +242,7 @@ class FeedForwardActionQNetwork(torch.nn.Module):
         """
         return {}
 
-    def set_states(self, states: dict | None, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_states(self, states: dict | None, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:

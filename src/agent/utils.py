@@ -188,7 +188,7 @@ def _append_update_metrics(
     value_loss: torch.Tensor,
     entropy: torch.Tensor,
     loss: torch.Tensor,
-):
+) -> None:
     """Append update metrics for reinforcement-learning agents and training utilities.
 
     Args:

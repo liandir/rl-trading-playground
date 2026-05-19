@@ -1,4 +1,59 @@
-"""Discrete buckets utilities for trading environment state, action, reward, and simulation logic."""
+r"""Long-only discrete-action environment with size buckets.
+
+Generalises [discrete.py](discrete.html) by replacing the toggle action
+with a fixed set of $K$ size buckets
+$\mathbf{q} = (q_1, \dots, q_K) \in (0, 1]^K$ (default
+$\mathbf{q} = (0.5, 1.0)$).
+
+State space
+===========
+
+Identical to [discrete.py](discrete.html):
+
+$$
+\dim(\mathcal{S}) = 3 M N + 4 N + 8,
+$$
+
+$$
+s_t = \big[\, t_{\text{vec}},\; p_{\text{rel}},\; \eta,\;
+x_{\text{rel}},\; c_{\text{rel}},\; \rho_t,\; v_{\text{rel}},\;
+m,\; \text{vol}_{\text{rel}} \,\big].
+$$
+
+See [discrete.py](discrete.html) for the per-feature definitions.
+
+Action space
+============
+
+Single flat discrete action $a \in \{0, 1, \dots, 2NK\}$:
+
+$$
+a =
+\begin{cases}
+0 & \text{hold},\\
+1 \dots NK & \text{BUY asset } k_a \text{ with bucket } q_{j_a},\\
+NK+1 \dots 2NK & \text{SELL asset } k_a \text{ with bucket } q_{j_a}.
+\end{cases}
+$$
+
+Asset and bucket indices are recovered as
+
+$$
+(k_a, j_a) =
+\big(\,\lfloor (a-1 \bmod NK) / K \rfloor,\;
+(a-1) \bmod K\,\big).
+$$
+
+Buy semantics: spend $q_{j_a} \cdot C_t$ of available cash on $k_a$,
+subject to fee $\phi_{\text{b}}$ and minimum order $A_{\min}$. Sell
+semantics: sell $q_{j_a} \cdot w_{k_a}$ units, subject to fee
+$\phi_{\text{s}}$ and tax $\tau$ on realised gains. Action cardinality
+is $1 + 2NK$.
+
+Reward and termination match [discrete.py](discrete.html):
+realised-ROI when sells occur, otherwise log-return or simple return;
+bankruptcy ends the episode with penalty $-\lambda_{\text{done}}$.
+"""
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
@@ -42,7 +97,7 @@ class State:
 
 class StateHistory:
     """StateHistory implementation for trading environment state, action, reward, and simulation logic."""
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the instance.
 
         Returns:
@@ -50,7 +105,7 @@ class StateHistory:
         """
         self.states: list[State] = []
 
-    def append(self, state: State):
+    def append(self, state: State) -> None:
         """Append for StateHistory.
 
         Args:
@@ -178,7 +233,7 @@ class MultiCurrencyEnv:
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -548,7 +603,7 @@ class MultiCurrencyEnv:
     # reset / update
     # -------------------------------------------------------------------------
 
-    def reset(self, data: dict, C0: Optional[float] = None) -> State:
+    def reset(self, data: dict, C0: Optional[float] | None = None) -> State:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -861,7 +916,7 @@ class BatchedMultiCurrencyEnv:
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -1002,7 +1057,7 @@ class BatchedMultiCurrencyEnv:
         low: torch.Tensor,      # (B, N)
         volume: torch.Tensor,   # (B, N)
         time: torch.Tensor,     # (B,) float timestamps
-        C0: Optional[float] = None,
+        C0: Optional[float] | None = None,
     ) -> torch.Tensor:
         """Reset internal state for a new episode or stream.
 

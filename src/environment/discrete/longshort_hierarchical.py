@@ -1,4 +1,68 @@
-"""Longshort hierarchical utilities for trading environment state, action, reward, and simulation logic."""
+r"""Hierarchical-action long/short multi-currency environment (no leverage).
+
+Same trading mechanics as
+[src.environment.generic.longshort](../generic/longshort.html), but the
+hybrid action is replaced by a *hierarchical* discrete action: one head
+chooses the trade direction and one head chooses a size bucket
+$q_{j} \in (0, 1]$ from a fixed grid of size $K$.
+
+State space
+===========
+
+Inherited unchanged from
+[src.environment.generic.longshort](../generic/longshort.html):
+
+$$
+\dim(\mathcal{S}) = 4 M N + 9 N + 8.
+$$
+
+Action space
+============
+
+The action is a pair $(a^{\mathrm d}, a^{\mathrm q})$ with
+
+$$
+a^{\mathrm d} \in \{0, 1, \dots, 3N\},\qquad a^{\mathrm q} \in \{0, \dots, K-1\}.
+$$
+
+The direction head $a^{\mathrm d}$ is
+
+$$
+a^{\mathrm d} =
+\begin{cases}
+0 & \text{hold},\\
+1 \dots N & \text{BUY (open LONG) asset } k = a^{\mathrm d} - 1,\\
+N+1 \dots 2N & \text{SELL (open SHORT) asset } k = a^{\mathrm d} - 1 - N,\\
+2N+1 \dots 3N & \text{CLOSE asset } k = a^{\mathrm d} - 1 - 2N.
+\end{cases}
+$$
+
+The size head $a^{\mathrm q}$ indexes
+$\mathbf{q} = (q_1, \dots, q_K)$ and is consumed only when buying or
+selling; hold and close ignore $a^{\mathrm q}$.
+
+The policy network emits $1 + 3N + 2K$ logits as
+
+$$
+[\,\text{primary} \in \mathbb{R}^{1+3N},\;
+\text{buy\_bucket} \in \mathbb{R}^K,\;
+\text{sell\_bucket} \in \mathbb{R}^K\,].
+$$
+
+The validity mask returned by ``valid_action_mask`` is a dict
+
+$$
+\{\,\text{primary} \in \mathbb{B}^{1+3N},\;
+\text{buy} \in \mathbb{B}^{N\times K},\;
+\text{sell} \in \mathbb{B}^{N\times K}\,\}.
+$$
+
+Open commits $q_{j} \cdot C_t$ of available cash as collateral on the
+target asset, auto-closing the opposite position on flip. Close
+reduces the position by $q_{j} \cdot |u_k|$ units.
+
+Reward and termination match the underlying generic env.
+"""
 from typing import Tuple, Dict
 
 import torch
@@ -120,7 +184,7 @@ class LongShortHierarchicalEnv(MultiCurrencyEnv):
         dtype: torch.dtype = torch.float32,
         device: str | torch.device | None = None,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -359,7 +423,7 @@ class BatchedLongShortHierarchicalEnv(BatchedMultiCurrencyEnv):
         dtype: torch.dtype = torch.float32,
         device: str | torch.device | None = None,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:

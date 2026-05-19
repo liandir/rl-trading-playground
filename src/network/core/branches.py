@@ -1,4 +1,5 @@
 """Branches utilities for neural network architectures and reusable model components."""
+from collections.abc import Callable
 import torch
 
 from src.network.core.recurrent import RecurrentNetwork, _build_recurrent_cell
@@ -31,11 +32,11 @@ class LatentRecurrentFeedForwardBranch(torch.nn.Module):
         hidden_dims_mem=None,
         hidden_dims_ff=None,
         combine_mode: str = "concat",
-        activation=torch.tanh,
-        recurrent_activation=torch.tanh,
+        activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
+        recurrent_activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -45,8 +46,8 @@ class LatentRecurrentFeedForwardBranch(torch.nn.Module):
             hidden_dims_mem (Any): The hidden dims mem value. Defaults to ``None``.
             hidden_dims_ff (Any): The hidden dims ff value. Defaults to ``None``.
             combine_mode (str): The combine mode value. Defaults to ``'concat'``.
-            activation (Any): The activation value. Defaults to ``torch.tanh``.
-            recurrent_activation (Any): The recurrent activation value. Defaults to ``torch.tanh``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.tanh``.
+            recurrent_activation (Callable[[torch.Tensor], torch.Tensor]): The recurrent activation value. Defaults to ``torch.tanh``.
             recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
             recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
 
@@ -109,7 +110,7 @@ class LatentRecurrentFeedForwardBranch(torch.nn.Module):
             return h_mem + h_ff
         return torch.cat([h_mem, h_ff], dim=-1)
 
-    def reset(self, batch_size: int = 1, device: torch.device = None, dtype: torch.dtype = None):
+    def reset(self, batch_size: int = 1, device: torch.device | None = None, dtype: torch.dtype | None = None) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -161,7 +162,7 @@ class LatentRecurrentFeedForwardBranch(torch.nn.Module):
             return self.recurrent.get_states(clone=clone, detach=detach)
         return self.recurrent.get_state(clone=clone, detach=detach)
 
-    def set_state(self, state, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_state(self, state, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore the current state snapshot.
 
         Args:

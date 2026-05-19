@@ -63,7 +63,7 @@ def _append_update_metrics(
     critic_loss: torch.Tensor,
     entropy: torch.Tensor,
     loss: torch.Tensor,
-):
+) -> None:
     """Append update metrics for reinforcement-learning agents and training utilities.
 
     Args:
@@ -114,7 +114,7 @@ def _append_update_metrics(
 
 class RolloutBuffer:
     """RolloutBuffer buffer for reinforcement-learning agents and training utilities."""
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the instance.
 
         Returns:
@@ -122,7 +122,7 @@ class RolloutBuffer:
         """
         self.clear()
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear buffered state.
 
         Returns:
@@ -135,7 +135,7 @@ class RolloutBuffer:
         self.dones       = []
         self.valid_masks = []
 
-    def store(self, state, action, log_prob, reward, done, valid_mask=None):
+    def store(self, state, action, log_prob, reward, done, valid_mask=None) -> None:
         """Store one transition or payload in the buffer.
 
         Args:
@@ -211,15 +211,15 @@ class PPOAgent:
         normalize_advantages: bool = True,
         advantage_type: str = "gae",
         gae_lambda: float = 0.95,
-        hidden_dims: list[int] = None,
-        hidden_dims_actor: list[int] = None,
-        hidden_dims_value: list[int] = None,
+        hidden_dims: list[int] | None = None,
+        hidden_dims_actor: list[int] | None = None,
+        hidden_dims_value: list[int] | None = None,
         activation: callable = torch.tanh,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -340,7 +340,7 @@ class PPOAgent:
             return action, log_prob
         return action.cpu(), log_prob.cpu()
 
-    def store(self, state, action, log_prob, reward, done, valid_mask=None):
+    def store(self, state, action, log_prob, reward, done, valid_mask=None) -> None:
         """Store one transition or payload in the buffer.
 
         Args:
@@ -356,12 +356,12 @@ class PPOAgent:
         """
         self.buffer.store(state, action, log_prob, reward, done, valid_mask=valid_mask)
 
-    def init_optimizer(self, lr, optim="AdamW"):
+    def init_optimizer(self, lr, optim: str = "AdamW") -> None:
         """Init optimizer for PPOAgent.
 
         Args:
             lr (Any): The lr value.
-            optim (Any): The optim value. Defaults to ``'AdamW'``.
+            optim (str): The optim value. Defaults to ``'AdamW'``.
 
         Returns:
             None: This function does not return a value.
@@ -485,7 +485,7 @@ class PPOAgent:
 
         return metrics
 
-    def save(self, path: str):
+    def save(self, path: str) -> None:
         """Save for PPOAgent.
 
         Args:
@@ -496,7 +496,7 @@ class PPOAgent:
         """
         torch.save({"network": self.net.state_dict()}, path)
 
-    def load(self, path: str, strict: bool = True):
+    def load(self, path: str, strict: bool = True) -> None:
         """Load for PPOAgent.
 
         Args:
@@ -514,15 +514,15 @@ class PPOAgent:
         env,
         data,
         n_episodes,
-        max_steps=2000,
-        warm_up=0,
-        update_interval=100,
-        n_updates=4,
-        burn_in_updates=0,
-        lr=3e-4,
-        optim="AdamW",
-        init_optimizer=False,
-        store_results=True,
+        max_steps: int = 2000,
+        warm_up: int = 0,
+        update_interval: int = 100,
+        n_updates: int = 4,
+        burn_in_updates: int = 0,
+        lr: float = 3e-4,
+        optim: str = "AdamW",
+        init_optimizer: bool = False,
+        store_results: bool = True,
         max_grad_norm=None,
     ):
         """Train on historical for PPOAgent.
@@ -531,15 +531,15 @@ class PPOAgent:
             env (Any): The env value.
             data (Any): The data value.
             n_episodes (Any): The n episodes value.
-            max_steps (Any): The max steps value. Defaults to ``2000``.
-            warm_up (Any): The warm up value. Defaults to ``0``.
-            update_interval (Any): The update interval value. Defaults to ``100``.
-            n_updates (Any): The n updates value. Defaults to ``4``.
-            burn_in_updates (Any): The burn in updates value. Defaults to ``0``.
-            lr (Any): The lr value. Defaults to ``0.0003``.
-            optim (Any): The optim value. Defaults to ``'AdamW'``.
-            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
-            store_results (Any): The store results value. Defaults to ``True``.
+            max_steps (int): The max steps value. Defaults to ``2000``.
+            warm_up (int): The warm up value. Defaults to ``0``.
+            update_interval (int): The update interval value. Defaults to ``100``.
+            n_updates (int): The n updates value. Defaults to ``4``.
+            burn_in_updates (int): The burn in updates value. Defaults to ``0``.
+            lr (float): The lr value. Defaults to ``0.0003``.
+            optim (str): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (bool): The init optimizer value. Defaults to ``False``.
+            store_results (bool): The store results value. Defaults to ``True``.
             max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
 
         Returns:
@@ -645,15 +645,15 @@ class PPOAgent:
         bat_env,
         open_, close, high, low, volume, times,
         n_episodes,
-        max_steps=2000,
-        warm_up=0,
-        update_interval=100,
-        n_updates=4,
-        burn_in_updates=1,
-        lr=3e-4,
-        optim="AdamW",
-        init_optimizer=False,
-        store_results=True,
+        max_steps: int = 2000,
+        warm_up: int = 0,
+        update_interval: int = 100,
+        n_updates: int = 4,
+        burn_in_updates: int = 1,
+        lr: float = 3e-4,
+        optim: str = "AdamW",
+        init_optimizer: bool = False,
+        store_results: bool = True,
         max_grad_norm=None,
     ):
         """Train on a BatchedMultiCurrencyEnv using pre-stacked tensor data.
@@ -681,15 +681,15 @@ class PPOAgent:
             volume (Any): The volume value.
             times (Any): The times value.
             n_episodes (Any): The n episodes value.
-            max_steps (Any): The max steps value. Defaults to ``2000``.
-            warm_up (Any): The warm up value. Defaults to ``0``.
-            update_interval (Any): The update interval value. Defaults to ``100``.
-            n_updates (Any): The n updates value. Defaults to ``4``.
-            burn_in_updates (Any): The burn in updates value. Defaults to ``1``.
-            lr (Any): The lr value. Defaults to ``0.0003``.
-            optim (Any): The optim value. Defaults to ``'AdamW'``.
-            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
-            store_results (Any): The store results value. Defaults to ``True``.
+            max_steps (int): The max steps value. Defaults to ``2000``.
+            warm_up (int): The warm up value. Defaults to ``0``.
+            update_interval (int): The update interval value. Defaults to ``100``.
+            n_updates (int): The n updates value. Defaults to ``4``.
+            burn_in_updates (int): The burn in updates value. Defaults to ``1``.
+            lr (float): The lr value. Defaults to ``0.0003``.
+            optim (str): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (bool): The init optimizer value. Defaults to ``False``.
+            store_results (bool): The store results value. Defaults to ``True``.
             max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
 
         Returns:

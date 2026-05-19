@@ -61,7 +61,6 @@ def main() -> None:
         _write_module_page(module, modules)
     _write_directory_pages(modules)
     _write_api_index(modules)
-    _write_markdown_pages(modules)
     _write_site_index(modules)
     (DOCS_DIR / ".nojekyll").write_text("", encoding="utf-8")
     print(f"Wrote {len(modules)} API pages to {DOCS_DIR}")
@@ -197,7 +196,6 @@ def _iter_objects(objects: list[ApiObject]) -> list[ApiObject]:
 def _write_site_index(modules: list[ModuleDoc]) -> None:
     """Write the GitHub Pages entry point."""
 
-    existing_markdown = _markdown_docs()
     api_entries = _api_entry_directories(modules)
     api_links = "\n".join(
         _card(
@@ -207,29 +205,18 @@ def _write_site_index(modules: list[ModuleDoc]) -> None:
         )
         for root in api_entries
     )
-    markdown_links = "\n".join(
-        _card(
-            _rel(DOCS_DIR / "index.html", _markdown_page_path(path)),
-            path.stem.replace("_", " ").title(),
-        )
-        for path in existing_markdown
-    )
     body = f"""
     {_global_sidebar(DOCS_DIR / "index.html", modules)}
     <main class="content">
       <section class="hero">
         <p class="eyebrow">Multi-Currency Trading</p>
         <h1>Project Documentation</h1>
-        <p>Static documentation generated from Python docstrings and the existing markdown notes.</p>
+        <p>Static documentation generated from Python docstrings.</p>
         <p><code>python3 scripts/build_docs.py</code></p>
       </section>
       <section>
         <h2>API Reference</h2>
         <ul class="module-list detailed">{api_links}</ul>
-      </section>
-      <section>
-        <h2>Design Notes</h2>
-        <ul class="module-list">{markdown_links or '<li>No markdown notes found.</li>'}</ul>
       </section>
     </main>
     """
@@ -258,22 +245,6 @@ def _write_api_index(modules: list[ModuleDoc]) -> None:
     </main>
     """
     (DOCS_DIR / "api" / "index.html").write_text(_page("API Reference", body, layout="split"), encoding="utf-8")
-
-
-def _write_markdown_pages(modules: list[ModuleDoc]) -> None:
-    """Write sidebar-wrapped HTML pages for hand-written markdown notes."""
-
-    for path in _markdown_docs():
-        page_path = _markdown_page_path(path)
-        body = f"""
-        {_global_sidebar(page_path, modules)}
-        <main class="content">
-          <p class="eyebrow">Design Note</p>
-          <h1>{_escape(path.stem.replace('_', ' ').title())}</h1>
-          <article class="markdown-doc">{_markdown_to_html(path.read_text(encoding="utf-8"))}</article>
-        </main>
-        """
-        page_path.write_text(_page(path.stem.replace("_", " ").title(), body, layout="split"), encoding="utf-8")
 
 
 def _write_directory_pages(modules: list[ModuleDoc]) -> None:
@@ -378,11 +349,6 @@ def _global_sidebar(
         f'{_escape(directory.as_posix())}/</a></li>'
         for directory in _api_entry_directories(modules)
     )
-    design_links = "".join(
-        f'<li><a href="{_rel(page_path, _markdown_page_path(path))}">'
-        f'{_escape(path.stem.replace("_", " ").title())}</a></li>'
-        for path in _markdown_docs()
-    )
     current = ""
     if current_directory is not None:
         current = f"""
@@ -402,10 +368,6 @@ def _global_sidebar(
         <ul class="toc-list">{api_links}</ul>
       </div>
       {current}
-      <div class="side-section">
-        <h2>Design Notes</h2>
-        <ul class="toc-list">{design_links or '<li><span class="muted">No notes.</span></li>'}</ul>
-      </div>
     </nav>
     """
 
@@ -529,17 +491,27 @@ def _render_object(
 
 
 def _heading_with_source(source: str, heading_html: str) -> str:
-    """Wrap the object heading in a <details> that reveals its source on click."""
+    """Wrap the object heading in a <details> that reveals its source on click.
+
+    The body uses a two-column layout: a non-selectable line-number gutter and
+    the highlighted source. Keeping the gutter in its own ``<pre>`` means it
+    aligns line-for-line with the code without leaking into copy/paste.
+    """
 
     if not source.strip():
         return heading_html
+    line_count = source.count("\n") + (0 if source.endswith("\n") else 1)
+    gutter = "\n".join(str(i) for i in range(1, max(line_count, 1) + 1))
     return (
         '<details class="source-block">'
         '<summary>'
         f'<div class="summary-heading">{heading_html}</div>'
         '<span class="source-toggle">Source<span class="source-caret">▸</span></span>'
         '</summary>'
-        f'<pre><code>{_highlight_python(source)}</code></pre>'
+        '<div class="source-pane">'
+        f'<pre class="source-gutter" aria-hidden="true">{gutter}</pre>'
+        f'<pre class="source-code"><code>{_highlight_python(source)}</code></pre>'
+        '</div>'
         '</details>'
     )
 
@@ -549,6 +521,28 @@ _FSTRING_TYPES = {
     for name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END")
     if hasattr(tokenize, name)
 }
+
+_BUILTIN_FUNCS = frozenset({
+    "abs", "all", "any", "ascii", "bin", "callable", "chr", "compile",
+    "delattr", "dir", "divmod", "enumerate", "eval", "exec", "filter",
+    "format", "getattr", "globals", "hasattr", "hash", "help", "hex", "id",
+    "input", "isinstance", "issubclass", "iter", "len", "locals", "map",
+    "max", "min", "next", "oct", "open", "ord", "pow", "print", "range",
+    "repr", "reversed", "round", "setattr", "slice", "sorted", "sum",
+    "super", "vars", "zip", "classmethod", "staticmethod", "property",
+})
+
+_BUILTIN_TYPES = frozenset({
+    "bool", "bytearray", "bytes", "complex", "dict", "float", "frozenset",
+    "int", "list", "object", "set", "str", "tuple", "type", "memoryview",
+    "BaseException", "Exception", "ValueError", "TypeError", "KeyError",
+    "IndexError", "RuntimeError", "StopIteration", "NotImplementedError",
+    "FileNotFoundError", "IOError", "OSError", "AttributeError",
+    "ImportError", "ModuleNotFoundError", "ZeroDivisionError",
+    "ArithmeticError", "AssertionError", "LookupError", "NameError",
+    "UnboundLocalError", "OverflowError", "RecursionError",
+    "PermissionError", "TimeoutError", "ConnectionError",
+})
 
 
 def _highlight_python(source: str) -> str:
@@ -590,10 +584,16 @@ def _highlight_python(source: str) -> str:
                 if start < end:
                     spans.append((start, end, css))
                 continue
-            if prev_keyword in ("def", "class"):
+            if prev_keyword == "def":
                 css = "tok-def-name"
+            elif prev_keyword == "class":
+                css = "tok-class-name"
             elif text in {"self", "cls"}:
                 css = "tok-self"
+            elif text in _BUILTIN_TYPES:
+                css = "tok-builtin-type"
+            elif text in _BUILTIN_FUNCS:
+                css = "tok-builtin-func"
         elif kind == tokenize.OP:
             css = "tok-punct"
 
@@ -695,79 +695,6 @@ def _anchor(value: str) -> str:
     """Return a stable HTML anchor id for an API object."""
 
     return "api-" + "".join(ch if ch.isalnum() else "-" for ch in value).strip("-").lower()
-
-
-def _markdown_docs() -> list[Path]:
-    """Return hand-written markdown documents that should get HTML wrappers."""
-
-    return sorted(p for p in DOCS_DIR.glob("*.md") if p.name.lower() != "readme.md")
-
-
-def _markdown_page_path(path: Path) -> Path:
-    """Return the generated HTML path for a markdown note."""
-
-    return path.with_suffix(".html")
-
-
-def _markdown_to_html(markdown: str) -> str:
-    """Render a conservative subset of Markdown as HTML."""
-
-    html_parts: list[str] = []
-    paragraph: list[str] = []
-    list_items: list[str] = []
-    code_lines: list[str] = []
-    in_code = False
-
-    def flush_paragraph() -> None:
-        if paragraph:
-            html_parts.append(f"<p>{_inline_code(_escape(' '.join(paragraph).strip()))}</p>")
-            paragraph.clear()
-
-    def flush_list() -> None:
-        if list_items:
-            html_parts.append("<ul>" + "".join(f"<li>{item}</li>" for item in list_items) + "</ul>")
-            list_items.clear()
-
-    def flush_code() -> None:
-        if code_lines:
-            html_parts.append(f'<pre class="doc-extra">{_escape("".join(code_lines).rstrip())}</pre>')
-            code_lines.clear()
-
-    for raw_line in markdown.splitlines(keepends=True):
-        line = raw_line.rstrip("\n")
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            if in_code:
-                flush_code()
-                in_code = False
-            else:
-                flush_paragraph()
-                flush_list()
-                in_code = True
-            continue
-        if in_code:
-            code_lines.append(raw_line)
-            continue
-        if not stripped:
-            flush_paragraph()
-            flush_list()
-            continue
-        if stripped.startswith("#"):
-            flush_paragraph()
-            flush_list()
-            level = min(len(stripped) - len(stripped.lstrip("#")), 4)
-            text = stripped[level:].strip()
-            html_parts.append(f"<h{level}>{_inline_code(_escape(text))}</h{level}>")
-            continue
-        if stripped.startswith(("- ", "* ")):
-            flush_paragraph()
-            list_items.append(_inline_code(_escape(stripped[2:].strip())))
-            continue
-        paragraph.append(stripped)
-    flush_paragraph()
-    flush_list()
-    flush_code()
-    return "\n".join(html_parts)
 
 
 def _doc_block(docstring: str) -> str:
@@ -1191,19 +1118,25 @@ def _page(title: str, body: str, *, layout: str = "default") -> str:
       color: var(--muted);
     }}
     .split {{
-      display: grid;
-      grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+      display: flex;
+      align-items: stretch;
       min-height: 100vh;
     }}
     .side {{
+      flex: 0 0 320px;
+      width: 320px;
+      min-width: 220px;
+      max-width: 520px;
       position: sticky;
       top: 0;
       height: 100vh;
       overflow: auto;
+      resize: horizontal;
       padding: 1.25rem;
       border-right: 1px solid var(--line);
       background: var(--panel);
     }}
+    .side::-webkit-resizer {{ background: transparent; }}
     .side h2 {{
       margin: 0 0 0.55rem;
       color: var(--muted);
@@ -1263,7 +1196,7 @@ def _page(title: str, body: str, *, layout: str = "default") -> str:
     .toc-name {{
       overflow-wrap: anywhere;
     }}
-    .content {{ padding: 2.5rem min(6vw, 4rem); max-width: 1100px; }}
+    .content {{ flex: 1 1 0; min-width: 0; padding: 2.5rem min(6vw, 4rem); max-width: 1100px; }}
     .api-object {{
       border-top: 1px solid var(--line);
       padding-top: 1.3rem;
@@ -1411,37 +1344,63 @@ def _page(title: str, body: str, *, layout: str = "default") -> str:
       transition: transform 0.15s ease;
     }}
     .source-block[open] .source-caret {{ transform: rotate(90deg); }}
-    .source-block > pre {{
-      margin: 0;
-      padding: 1rem 1.05rem;
-      overflow-x: auto;
+    .source-pane {{
+      display: flex;
+      align-items: stretch;
+      background: #fafafa;
       border-top: 1px solid var(--line);
       font-size: 0.88rem;
       line-height: 1.55;
-      color: var(--ink);
+      color: #000000;
+      overflow: hidden;
     }}
-    .tok-keyword {{ color: #8250df; font-weight: 600; }}
-    .tok-string  {{ color: #0a3069; }}
-    .tok-number  {{ color: #0550ae; }}
-    .tok-comment {{ color: #6e7781; font-style: italic; }}
-    .tok-def-name {{ color: #6f42c1; font-weight: 600; }}
-    .tok-self {{ color: #cf222e; font-style: italic; }}
-    .tok-punct {{ color: #57606a; }}
-    .markdown-doc {{
-      max-width: 980px;
+    .source-pane > pre {{
+      margin: 0;
+      font-size: inherit;
+      line-height: inherit;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
     }}
-    .markdown-doc h1, .markdown-doc h2, .markdown-doc h3, .markdown-doc h4 {{
-      margin-top: 1.6rem;
+    .source-gutter {{
+      padding: 1rem 0.7rem 1rem 1rem;
+      color: #b0b3b8;
+      text-align: right;
+      user-select: none;
+      background: #f3f3f3;
+      border-right: 1px solid var(--line);
+      white-space: pre;
     }}
-    .markdown-doc p {{
-      margin: 0.9rem 0;
+    .source-code {{
+      padding: 1rem 1.1rem;
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-x: auto;
+      white-space: pre;
     }}
-    .markdown-doc ul {{
-      padding-left: 1.3rem;
-    }}
+    /* VS Code Light Modern palette */
+    .tok-keyword      {{ color: #0000ff; }}
+    .tok-string       {{ color: #a31515; }}
+    .tok-number       {{ color: #098658; }}
+    .tok-comment      {{ color: #008000; font-style: italic; }}
+    .tok-def-name     {{ color: #795e26; }}
+    .tok-class-name   {{ color: #267f99; }}
+    .tok-self         {{ color: #0000ff; }}
+    .tok-builtin-type {{ color: #267f99; }}
+    .tok-builtin-func {{ color: #795e26; }}
+    .tok-punct        {{ color: #000000; }}
     @media (max-width: 860px) {{
       .split {{ display: block; }}
-      .side {{ position: static; height: auto; max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); }}
+      .side {{
+        flex: none;
+        width: auto;
+        max-width: none;
+        min-width: 0;
+        resize: none;
+        position: static;
+        height: auto;
+        max-height: 45vh;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }}
       .content {{ padding: 1.5rem; }}
       .doc-field {{ grid-template-columns: 1fr; gap: 0.2rem; }}
       section, .hero {{ padding-left: 1.25rem; padding-right: 1.25rem; }}

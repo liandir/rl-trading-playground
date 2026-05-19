@@ -1,4 +1,52 @@
-"""Longshort buckets utilities for trading environment state, action, reward, and simulation logic."""
+r"""Pure-discrete long/short multi-currency environment with size buckets.
+
+Subclasses [src.environment.generic.longshort](../generic/longshort.html)
+to replace its continuous fraction $a^{\mathrm c} \in [0, 1]$ with a
+fixed set of $K$ size buckets
+$\mathbf{q} = (q_1, \dots, q_K) \in (0, 1]^K$ (default
+$\mathbf{q} = (0.5, 1.0)$). State features are inherited unchanged.
+
+State space
+===========
+
+Same flat layout as
+[src.environment.generic.longshort](../generic/longshort.html):
+
+$$
+\dim(\mathcal{S}) = 4 M N + 9 N + 8.
+$$
+
+Action space
+============
+
+Single flat discrete action $a \in \{0, 1, \dots, 3NK\}$:
+
+$$
+a =
+\begin{cases}
+0 & \text{hold},\\
+1 \dots NK & \text{open LONG with bucket } q_{j_a} \text{ on asset } k_a,\\
+NK+1 \dots 2NK & \text{open SHORT with bucket } q_{j_a} \text{ on asset } k_a,\\
+2NK+1 \dots 3NK & \text{CLOSE bucket } q_{j_a} \text{ of asset } k_a.
+\end{cases}
+$$
+
+For each non-hold action
+
+$$
+(k_a, j_a) =
+\big(\,\lfloor (a-1 \bmod NK) / K \rfloor,\;
+(a-1) \bmod K\,\big).
+$$
+
+Open commits $q_{j_a} \cdot C_t$ of available cash as collateral on
+$k_a$. Flips auto-close the full opposite position first. Close
+reduces position size by $q_{j_a} \cdot |u_{k_a}|$ units. Same-side
+re-opens are rejected (validity exposed via ``valid_action_mask``).
+
+Reward and termination match
+[src.environment.generic.longshort](../generic/longshort.html).
+"""
 from typing import Tuple
 
 import torch
@@ -59,7 +107,7 @@ class LongShortEnv(MultiCurrencyEnv):
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -361,7 +409,7 @@ class BatchedLongShortEnv(BatchedMultiCurrencyEnv):
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:

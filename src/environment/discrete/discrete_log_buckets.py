@@ -1,4 +1,56 @@
-"""Discrete log buckets utilities for trading environment state, action, reward, and simulation logic."""
+r"""Long-only discrete-action environment with log features and size buckets.
+
+Combines the log-space feature set of
+[discrete_log.py](discrete_log.html) with the $K$-bucket action space
+of [discrete_buckets.py](discrete_buckets.html).
+
+State space
+===========
+
+Same log-space layout as [discrete_log.py](discrete_log.html), with the
+candle close-location $\zeta_t$ and body $\beta_t$ removed:
+
+$$
+\dim(\mathcal{S}) = 3 M N + 5 N + 8,
+$$
+
+$$
+s_t = \big[\, t_{\text{vec}},\; r^{\log}_t,\; p_{\text{rel}},\;
+\eta^{\log},\; \text{vol}_{\text{rel}},\; v_{\text{rel}},\;
+x_{\text{rel}},\; \rho_t,\; \mathbb{1}_{\text{pos}},\; m \,\big].
+$$
+
+Multi-scale features use log-domain EMAs:
+
+$$
+p_{\text{rel}, m, k} = \log\!\frac{p_k}{\bar p_{m,k}},\qquad
+v_{\text{rel}, m, k} = \log\!\frac{v_k}{\bar v_{m,k}},\qquad
+\text{vol}_{\text{rel}, m, k} =
+\frac{\eta_k - \bar\eta_{m,k}}{\bar\eta_{m,k}}.
+$$
+
+See [discrete_log.py](discrete_log.html) for the per-bar log return
+$r^{\log}_t$, the longest-scale range $\eta^{\log}_k$, and the
+portfolio block $(x_{\text{rel}}, \rho_t, \mathbb{1}_{\text{pos}}, m)$.
+
+Action space
+============
+
+Identical to [discrete_buckets.py](discrete_buckets.html):
+
+$$
+a \in \{0, 1, \dots, 2NK\},\qquad |\mathcal{A}| = 1 + 2NK,
+$$
+
+with bucket-scaled BUY / SELL semantics on cash and held units
+respectively.
+
+Reward and termination
+======================
+
+Realised-ROI when sells occur, otherwise log or simple portfolio
+return; bankruptcy terminates with penalty $-\lambda_{\text{done}}$.
+"""
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
@@ -48,7 +100,7 @@ class State:
 
 class StateHistory:
     """StateHistory implementation for trading environment state, action, reward, and simulation logic."""
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the instance.
 
         Returns:
@@ -56,7 +108,7 @@ class StateHistory:
         """
         self.states: list[State] = []
 
-    def append(self, state: State):
+    def append(self, state: State) -> None:
         """Append for StateHistory.
 
         Args:
@@ -125,7 +177,7 @@ class MultiCurrencyEnv:
         done_reward_penalty: float = 10.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -368,7 +420,7 @@ class MultiCurrencyEnv:
     # reset / update
     # -------------------------------------------------------------------------
 
-    def reset(self, data: dict, C0: Optional[float] = None) -> State:
+    def reset(self, data: dict, C0: Optional[float] | None = None) -> State:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -674,7 +726,7 @@ class BatchedMultiCurrencyEnv:
         done_reward_penalty: float = 10.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -805,7 +857,7 @@ class BatchedMultiCurrencyEnv:
         low:    torch.Tensor,   # (B, N)
         volume: torch.Tensor,   # (B, N)
         time:   torch.Tensor,   # (B,)
-        C0: Optional[float] = None,
+        C0: Optional[float] | None = None,
     ) -> torch.Tensor:
         """Reset internal state for a new episode or stream.
 

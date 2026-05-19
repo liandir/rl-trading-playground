@@ -1,4 +1,167 @@
-"""Longshort utilities for trading environment state, action, reward, and simulation logic."""
+r"""Hybrid-action long/short multi-currency trading environment (no leverage).
+
+The agent trades $N$ assets indexed $k = 0, \dots, N-1$ with a single USD
+cash account. Positions are signed: long when $u_k > 0$, short when
+$u_k < 0$. Each open commits cash as collateral at 1:1 (equivalent to a
+linear perpetual with leverage $\ell = 1$).
+
+State space
+===========
+
+Let $M$ denote the number of exponential moving-average (EMA) time
+constants $\tau_m$ used to summarise market history. At step $t$ the
+agent observes a flat state vector of dimension
+
+$$
+\dim(\mathcal{S}) = 4 M N + 9 N + 8.
+$$
+
+It is the concatenation of one global block and $N$ per-asset blocks:
+
+$$
+s_t = \big[\,\text{globals}_t \;\big|\; \text{asset}_t^{(0)} \;\big|\;
+\dots \;\big|\; \text{asset}_t^{(N-1)}\,\big].
+$$
+
+Globals (8)
+-----------
+
+$$
+\text{globals}_t = \big[\, t_{\text{vec}},\; c_{\text{rel}},\; \rho_t \,\big],
+\qquad t_{\text{vec}} \in \mathbb{R}^{6},\; c_{\text{rel}}, \rho_t \in \mathbb{R}.
+$$
+
+The cyclic time encoding is
+
+$$
+t_{\text{vec}} =
+\big[\, \sin 2\pi\phi_d,\, \cos 2\pi\phi_d,\,
+\sin 2\pi\phi_w,\, \cos 2\pi\phi_w,\,
+\sin 2\pi\phi_y,\, \cos 2\pi\phi_y \,\big],
+$$
+
+with $\phi_d, \phi_w, \phi_y$ the fractional positions in the day, week
+and year. The relative cash exposure is $c_{\text{rel}} = C_t / V_t$
+with portfolio value $V_t = C_t + \sum_k u_k p_k$, and the overall
+commitment ratio is
+
+$$
+\rho_t = \frac{S_t}{S_t + C_t},
+\qquad S_t = \sum_k I_k(t),
+$$
+
+where $I_k$ is the cash collateral committed to position $k$.
+
+Per-asset block (4M+9)
+----------------------
+
+For each asset $k$ the block is
+
+$$
+\text{asset}_t^{(k)} =
+\big[\, p_{\text{rel}}[:,k],\; v_{\text{rel}}[:,k],\;
+\text{vol}_{\text{rel}}[:,k],\; \text{body}_{\text{sm}}[:,k],\;
+\eta_k,\; \beta_k,\; r_k,\; w^+_k,\; w^-_k,\;
+x_k,\; c_k,\; m_k,\; \sigma_k \,\big].
+$$
+
+Multi-scale features (each in $\mathbb{R}^M$) use EMAs
+$\bar y_m(t) = \bar y_m(t-1) + (1 - e^{-\Delta t/\tau_m})(y(t) - \bar y_m(t-1))$:
+
+$$
+p_{\text{rel}, m, k} = \frac{p_k - \bar p_{m,k}}{\bar p_{m,k}},
+\qquad
+v_{\text{rel}, m, k} = \log\!\frac{v_k(t)}{v_k(t-\Delta t) + \varepsilon},
+$$
+
+$$
+\text{vol}_{\text{rel}, m, k} =
+\frac{\eta_k - \overline{\eta}_{m,k}}{\overline{\eta}_{m,k}},
+\qquad
+\text{body}_{\text{sm}, m, k} = \text{EMA}_{\tau_m}\!\big(\beta_k\big).
+$$
+
+Per-bar candle features (each in $\mathbb{R}$):
+
+$$
+\eta_k = \frac{h_k - l_k}{p_k},\quad
+\beta_k = \frac{p_k - o_k}{h_k - l_k},\quad
+r_k = \frac{p_k - o_k}{o_k},
+$$
+
+$$
+w^+_k = \frac{h_k - \max(o_k, p_k)}{h_k - l_k},\quad
+w^-_k = \frac{\min(o_k, p_k) - l_k}{h_k - l_k},
+$$
+
+with $o_k, h_k, l_k, p_k$ the bar open, high, low, close.
+
+Portfolio features:
+
+$$
+x_k = \frac{u_k p_k}{V_t},\qquad
+c_k = \frac{I_k}{\sum_j I_j + \varepsilon},\qquad
+\sigma_k \in \{-1, 0, +1\}
+$$
+
+are the signed value weight, the committed-capital distribution, and the
+position side. Unrealised after-tax PnL is
+
+$$
+m_k =
+\begin{cases}
+\dfrac{u_k (p_k - \bar p^{\text{ent}}_k) - \tau \cdot [\,u_k(p_k - \bar p^{\text{ent}}_k)\,]_+ - \phi_{\text{c}}}{I_k}
+& \text{open position},\\[1.2ex]
+0 & \text{flat},
+\end{cases}
+$$
+
+with entry price $\bar p^{\text{ent}}_k$, tax rate $\tau$ on positive
+PnL, and per-close fee $\phi_{\text{c}}$.
+
+Action space
+============
+
+The hybrid action is $a_t = (a^{\mathrm d}, a^{\mathrm c})$ with discrete
+head $a^{\mathrm d} \in \{0, 1, \dots, 3N\}$ and continuous fraction
+$a^{\mathrm c} \in [0, 1]$:
+
+$$
+a^{\mathrm d} =
+\begin{cases}
+0 & \text{hold},\\
+1 \dots N & \text{open LONG asset } k = a^{\mathrm d} - 1,\\
+N+1 \dots 2N & \text{open SHORT asset } k = a^{\mathrm d} - 1 - N,\\
+2N+1 \dots 3N & \text{CLOSE position } k = a^{\mathrm d} - 1 - 2N.
+\end{cases}
+$$
+
+Total discrete cardinality is $1 + 3N$. Opening commits
+$a^{\mathrm c} \cdot C_t$ of available cash as collateral; flipping
+sides auto-closes the existing position before opening the new one.
+Closing reduces position size by $a^{\mathrm c} \cdot |u_k|$ units.
+
+Reward
+======
+
+Two value-based reward modes are supported. When realised PnL is
+non-trivial in the current step the reward switches to a realised-ROI
+form:
+
+$$
+r_t =
+\begin{cases}
+\lambda_{\text{roi}} \dfrac{\sum_k \text{PnL}^{\text{real}}_k(t)}
+                          {\sum_k \text{Cost}^{\text{real}}_k(t)}
+& \sum_k \text{Cost}^{\text{real}}_k(t) > \varepsilon,\\[1.4ex]
+\lambda_{\text{val}}\,(V_t - V_{t-1})/V_{t-1} & \text{reward\_mode = \texttt{return}},\\[0.4ex]
+\lambda_{\text{val}}\,\log(V_t / V_{t-1}) & \text{reward\_mode = \texttt{log}}.
+\end{cases}
+$$
+
+A terminal penalty $-\lambda_{\text{done}}$ is added on bankruptcy, i.e.
+when $V_t \le V_{\text{bk}}$.
+"""
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
@@ -85,7 +248,7 @@ class State:
 
 class StateHistory:
     """StateHistory implementation for trading environment state, action, reward, and simulation logic."""
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the instance.
 
         Returns:
@@ -93,7 +256,7 @@ class StateHistory:
         """
         self.states: list[State] = []
 
-    def append(self, state: State):
+    def append(self, state: State) -> None:
         """Append for StateHistory.
 
         Args:
@@ -286,7 +449,7 @@ class MultiCurrencyEnv:
         dtype: torch.dtype = torch.float32,
         device: str | torch.device | None = None,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -822,7 +985,7 @@ class MultiCurrencyEnv:
     # reset / update
     # -------------------------------------------------------------------------
 
-    def reset(self, data_or_close=None, high=None, low=None, volume=None, time=None, C0: Optional[float] = None, open_=None, *, data: dict | None = None) -> State:
+    def reset(self, data_or_close=None, high=None, low=None, volume=None, time=None, C0: Optional[float] | None = None, open_=None, *, data: dict | None = None) -> State:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -1191,7 +1354,7 @@ class BatchedMultiCurrencyEnv:
         dtype: torch.dtype = torch.float32,
         device: str | torch.device | None = None,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -1547,7 +1710,7 @@ class BatchedMultiCurrencyEnv:
 
         return torch.cat([globals_block, asset_block.reshape(B, -1)], dim=1)
 
-    def _update(self, open_, close, high, low, volume, time):
+    def _update(self, open_, close, high, low, volume, time) -> None:
         """Apply one update step.
 
         Args:

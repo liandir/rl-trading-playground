@@ -1,4 +1,112 @@
-"""Longshort utilities for trading environment state, action, reward, and simulation logic."""
+r"""Pure-discrete long/short multi-currency trading environment (no leverage).
+
+Discrete counterpart to
+[src.environment.generic.longshort](../generic/longshort.html): the
+hybrid action's continuous fraction is removed, and every open commits
+*all* available cash as collateral. Positions are signed
+($u_k > 0$ long, $u_k < 0$ short), shorts collateralised 1:1.
+
+State space
+===========
+
+The flat state vector has dimension
+
+$$
+\dim(\mathcal{S}) = 3 M N + 5 N + 8,
+$$
+
+$$
+s_t = \big[\, t_{\text{vec}},\; p_{\text{rel}},\; \eta,\;
+x_{\text{rel}},\; c_{\text{rel}},\; \rho_t,\; v_{\text{rel}},\;
+m,\; \sigma,\; \text{vol}_{\text{rel}} \,\big].
+$$
+
+Shapes:
+
+$$
+t_{\text{vec}} \in \mathbb{R}^{6},\;
+p_{\text{rel}}, v_{\text{rel}}, \text{vol}_{\text{rel}} \in \mathbb{R}^{M\times N},\;
+\eta, c_{\text{rel}}, m, \sigma \in \mathbb{R}^{N},\;
+x_{\text{rel}} \in \mathbb{R}^{N+1},\;
+\rho_t \in \mathbb{R}.
+$$
+
+Per-asset value weight is *signed*:
+
+$$
+x_{\text{rel}, k+1} = \frac{u_k\, p_k}{V_t},\qquad
+V_t = C_t + \sum_k u_k p_k,
+$$
+
+with $x_{\text{rel}, 0} = C_t / V_t$. The committed distribution
+$c_{\text{rel}, k} = I_k / (S_t + \varepsilon) \ge 0$ and overall
+commitment $\rho_t = S_t / (S_t + C_t)$ use posted collateral
+$I_k = $ cash committed at open time. Position side is
+
+$$
+\sigma_k =
+\begin{cases}
++1 & u_k > 0,\\
+0 & u_k = 0,\\
+-1 & u_k < 0,
+\end{cases}
+$$
+
+and signed unrealised after-tax PnL relative to committed cash is
+
+$$
+m_k =
+\begin{cases}
+\dfrac{u_k(p_k - \bar p^{\text{ent}}_k) - \tau\,[u_k(p_k - \bar p^{\text{ent}}_k)]_+ - \phi_{\text{c}}}{I_k}
+& \text{open},\\[1.2ex]
+0 & \text{flat}.
+\end{cases}
+$$
+
+See [discrete.py](discrete.html) for the multi-scale price, volume and
+volatility definitions.
+
+Action space
+============
+
+Discrete head only:
+
+$$
+a \in \{0, 1, \dots, 3N\},\qquad |\mathcal{A}| = 1 + 3N,
+$$
+
+$$
+a =
+\begin{cases}
+0 & \text{hold},\\
+1 \dots N & \text{open LONG asset } k = a - 1,\\
+N+1 \dots 2N & \text{open SHORT asset } k = a - 1 - N,\\
+2N+1 \dots 3N & \text{CLOSE position } k = a - 1 - 2N.
+\end{cases}
+$$
+
+Every open commits the full available cash $C_t$ as collateral. Flips
+auto-close the existing opposite position first. Close is reduce-only.
+
+Reward
+======
+
+Identical to the hybrid env:
+
+$$
+r_t =
+\begin{cases}
+\lambda_{\text{roi}} \dfrac{\sum_k \text{PnL}^{\text{real}}_k}
+                           {\sum_k \text{Cost}^{\text{real}}_k}
+& \sum_k \text{Cost}^{\text{real}}_k > \varepsilon,\\[1.4ex]
+\lambda_{\text{val}}\,\log(V_t / V_{t-1}) & \text{reward\_mode = \texttt{log}},\\[0.3ex]
+\lambda_{\text{val}}\,(V_t - V_{t-1})/V_{t-1} & \text{reward\_mode = \texttt{return}}.
+\end{cases}
+$$
+
+Bankruptcy at $V_t \le V_{\text{bk}}$ ends the episode and adds the
+penalty $-\lambda_{\text{done}}$.
+"""
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
@@ -44,7 +152,7 @@ class State:
 
 class StateHistory:
     """StateHistory implementation for trading environment state, action, reward, and simulation logic."""
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the instance.
 
         Returns:
@@ -52,7 +160,7 @@ class StateHistory:
         """
         self.states: list[State] = []
 
-    def append(self, state: State):
+    def append(self, state: State) -> None:
         """Append for StateHistory.
 
         Args:
@@ -186,7 +294,7 @@ class LongShortEnv:
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -548,7 +656,7 @@ class LongShortEnv:
     # reset / update
     # -------------------------------------------------------------------------
 
-    def reset(self, data: dict, C0: Optional[float] = None) -> State:
+    def reset(self, data: dict, C0: Optional[float] | None = None) -> State:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -858,7 +966,7 @@ class BatchedLongShortEnv:
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -1003,7 +1111,7 @@ class BatchedLongShortEnv:
         low: torch.Tensor,
         volume: torch.Tensor,
         time: torch.Tensor,
-        C0: Optional[float] = None,
+        C0: Optional[float] | None = None,
     ) -> torch.Tensor:
         """Reset internal state for a new episode or stream.
 

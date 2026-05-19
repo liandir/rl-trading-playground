@@ -1,4 +1,5 @@
 """Action value utilities for neural network architectures and reusable model components."""
+from collections.abc import Callable
 import torch
 
 from src.network.core.recurrent import RecurrentNetwork, _build_recurrent_cell
@@ -17,10 +18,10 @@ class ActionValueNetwork(torch.nn.Module):
         hidden_dims=None,
         hidden_dims_actor=None,
         hidden_dims_value=None,
-        activation=torch.tanh,
+        activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -29,7 +30,7 @@ class ActionValueNetwork(torch.nn.Module):
             hidden_dims (Any): The hidden dims value. Defaults to ``None``.
             hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
             hidden_dims_value (Any): The hidden dims value value. Defaults to ``None``.
-            activation (Any): The activation value. Defaults to ``torch.tanh``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.tanh``.
             recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
             recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
 
@@ -70,7 +71,7 @@ class ActionValueNetwork(torch.nn.Module):
             recurrent_kwargs=self.recurrent_kwargs,
         )
 
-    def reset(self, batch_size: int = 1):
+    def reset(self, batch_size: int = 1) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -133,7 +134,7 @@ class ActionValueNetwork(torch.nn.Module):
         value = self.value.get_states(clone=clone, detach=detach)
         return {"trunk": trunk, "actor": actor, "v": value}
 
-    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:

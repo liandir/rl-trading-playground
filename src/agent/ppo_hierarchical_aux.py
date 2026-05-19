@@ -18,7 +18,7 @@ from src.agent.utils import (
 class AuxiliaryHierarchicalPPORolloutBuffer(AuxiliaryHierarchicalRolloutBuffer):
     """Auxiliary hierarchical PPO buffer with old log-probs."""
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear buffered state.
 
         Returns:
@@ -27,7 +27,7 @@ class AuxiliaryHierarchicalPPORolloutBuffer(AuxiliaryHierarchicalRolloutBuffer):
         super().clear()
         self.log_probs = []
 
-    def store(self, state, action, log_prob, reward, done, mask=None, aux_target=None):
+    def store(self, state, action, log_prob, reward, done, mask=None, aux_target=None) -> None:
         """Store one transition or payload in the buffer.
 
         Args:
@@ -69,7 +69,7 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
         aux_coef: float = 0.05,
         aux_loss_coefs: dict[str, float] | None = None,
         **kwargs,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -123,7 +123,7 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
             self.net.set_states(h0, strict=False)
         return self.net.forward_seq(state_seq)
 
-    def store(self, state, action, log_prob, reward, done, mask=None, aux_target=None):
+    def store(self, state, action, log_prob, reward, done, mask=None, aux_target=None) -> None:
         """Store one transition or payload in the buffer.
 
         Args:
@@ -238,15 +238,15 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
         bat_env,
         open_, close, high, low, volume, times,
         n_episodes,
-        max_steps=2000,
-        warm_up=0,
-        update_interval=100,
-        n_updates=4,
-        burn_in_updates=1,
-        lr=3e-4,
-        optim="AdamW",
-        init_optimizer=False,
-        store_results=True,
+        max_steps: int = 2000,
+        warm_up: int = 0,
+        update_interval: int = 100,
+        n_updates: int = 4,
+        burn_in_updates: int = 1,
+        lr: float = 3e-4,
+        optim: str = "AdamW",
+        init_optimizer: bool = False,
+        store_results: bool = True,
         max_grad_norm=None,
     ):
         """Train on historical bat for HierarchicalAuxPPOAgent.
@@ -260,15 +260,15 @@ class HierarchicalAuxPPOAgent(HierarchicalPPOAgent):
             volume (Any): The volume value.
             times (Any): The times value.
             n_episodes (Any): The n episodes value.
-            max_steps (Any): The max steps value. Defaults to ``2000``.
-            warm_up (Any): The warm up value. Defaults to ``0``.
-            update_interval (Any): The update interval value. Defaults to ``100``.
-            n_updates (Any): The n updates value. Defaults to ``4``.
-            burn_in_updates (Any): The burn in updates value. Defaults to ``1``.
-            lr (Any): The lr value. Defaults to ``0.0003``.
-            optim (Any): The optim value. Defaults to ``'AdamW'``.
-            init_optimizer (Any): The init optimizer value. Defaults to ``False``.
-            store_results (Any): The store results value. Defaults to ``True``.
+            max_steps (int): The max steps value. Defaults to ``2000``.
+            warm_up (int): The warm up value. Defaults to ``0``.
+            update_interval (int): The update interval value. Defaults to ``100``.
+            n_updates (int): The n updates value. Defaults to ``4``.
+            burn_in_updates (int): The burn in updates value. Defaults to ``1``.
+            lr (float): The lr value. Defaults to ``0.0003``.
+            optim (str): The optim value. Defaults to ``'AdamW'``.
+            init_optimizer (bool): The init optimizer value. Defaults to ``False``.
+            store_results (bool): The store results value. Defaults to ``True``.
             max_grad_norm (Any): The max grad norm value. Defaults to ``None``.
 
         Returns:

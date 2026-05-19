@@ -1,4 +1,5 @@
 """Vanilla utilities for neural network architectures and reusable model components."""
+from collections.abc import Callable
 import torch
 
 
@@ -19,14 +20,14 @@ class VanillaNetwork(torch.nn.Module):
     \\]
     where $g$ is ``out_act``.
     """
-    def __init__(self, n_in, n_out, hidden_dims=[], activation=torch.tanh, out_act=lambda x: x):
+    def __init__(self, n_in, n_out, hidden_dims: list = [], activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh, out_act=lambda x: x) -> None:
         """Initialize the instance.
 
         Args:
             n_in (Any): The n in value.
             n_out (Any): The n out value.
-            hidden_dims (Any): The hidden dims value. Defaults to ``[]``.
-            activation (Any): The activation value. Defaults to ``torch.tanh``.
+            hidden_dims (list): The hidden dims value. Defaults to ``[]``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.tanh``.
             out_act (Any): The out act value. Defaults to ``lambda x: x``.
 
         Returns:
@@ -60,7 +61,7 @@ class VanillaNetwork(torch.nn.Module):
             z = self.activation(layer(z))
         return self.out_act(self.out(z))
 
-    def reset(self, batch_size: int = 1, device=None, dtype=None):
+    def reset(self, batch_size: int = 1, device=None, dtype=None) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -98,7 +99,7 @@ class VanillaNetwork(torch.nn.Module):
         """
         return {}
 
-    def set_states(self, states, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_states(self, states, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:
@@ -132,20 +133,20 @@ class ActionValueNetwork(torch.nn.Module):
             self,
             state_dim,
             action_dim,
-            hidden_dims=[],
-            hidden_dims_actor = [],
-            hidden_dims_value = [],
-            activation=torch.relu
-        ):
+            hidden_dims: list = [],
+            hidden_dims_actor: list = [],
+            hidden_dims_value: list = [],
+            activation: Callable[[torch.Tensor], torch.Tensor] = torch.relu
+        ) -> None:
         """Initialize the instance.
 
         Args:
             state_dim (Any): The state dim value.
             action_dim (Any): The action dim value.
-            hidden_dims (Any): The hidden dims value. Defaults to ``[]``.
-            hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``[]``.
-            hidden_dims_value (Any): The hidden dims value value. Defaults to ``[]``.
-            activation (Any): The activation value. Defaults to ``torch.relu``.
+            hidden_dims (list): The hidden dims value. Defaults to ``[]``.
+            hidden_dims_actor (list): The hidden dims actor value. Defaults to ``[]``.
+            hidden_dims_value (list): The hidden dims value value. Defaults to ``[]``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.relu``.
 
         Returns:
             None: This function does not return a value.
@@ -226,7 +227,7 @@ class ActionValueNetwork(torch.nn.Module):
         z = self.forward(x)
         return self.actor(z), self.value(z)
 
-    def reset(self, batch_size: int = 1, device=None, dtype=None):
+    def reset(self, batch_size: int = 1, device=None, dtype=None) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -266,7 +267,7 @@ class ActionValueNetwork(torch.nn.Module):
         """
         return {}
 
-    def set_states(self, states, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_states(self, states, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:
@@ -294,14 +295,14 @@ class VanillaQNetwork(VanillaNetwork):
     It inherits the multilayer perceptron stack from ``VanillaNetwork`` and
     sets the input dimension to ``state_dim + action_dim``.
     """
-    def __init__(self, state_dim, action_dim, hidden_dims=[], activation=torch.tanh, out_act=lambda x: x):
+    def __init__(self, state_dim, action_dim, hidden_dims: list = [], activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh, out_act=lambda x: x) -> None:
         """Initialize the instance.
 
         Args:
             state_dim (Any): The state dim value.
             action_dim (Any): The action dim value.
-            hidden_dims (Any): The hidden dims value. Defaults to ``[]``.
-            activation (Any): The activation value. Defaults to ``torch.tanh``.
+            hidden_dims (list): The hidden dims value. Defaults to ``[]``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.tanh``.
             out_act (Any): The out act value. Defaults to ``lambda x: x``.
 
         Returns:

@@ -9,27 +9,32 @@ import torch
 # ---------------------------------------------------------------------------
 
 def _split_heads(t: torch.Tensor, num_heads: int, d_head: int) -> torch.Tensor:
-    """(..., L, inner_dim) -> (..., num_heads, L, d_head)
+    """Reshape ``(..., L, inner_dim)`` into ``(..., num_heads, L, d_head)``.
 
     Args:
-        t (torch.Tensor): The t value.
-        num_heads (int): The num heads value.
-        d_head (int): The d head value.
+        t (torch.Tensor): Tensor whose last axis carries the fused per-head
+            features, i.e. shape ``(..., L, num_heads * d_head)``.
+        num_heads (int): Number of attention heads.
+        d_head (int): Per-head feature size; must satisfy
+            ``num_heads * d_head == t.shape[-1]``.
 
     Returns:
-        torch.Tensor: The computed or requested result.
+        torch.Tensor: Tensor with heads pulled out into their own axis, shape
+            ``(..., num_heads, L, d_head)``.
     """
     return t.unflatten(-1, (num_heads, d_head)).transpose(-3, -2)
 
 
 def _merge_heads(t: torch.Tensor) -> torch.Tensor:
-    """(..., num_heads, L, d_head) -> (..., L, inner_dim)
+    """Inverse of :func:`_split_heads`: collapse the head axis back into features.
 
     Args:
-        t (torch.Tensor): The t value.
+        t (torch.Tensor): Per-head tensor of shape
+            ``(..., num_heads, L, d_head)``.
 
     Returns:
-        torch.Tensor: The computed or requested result.
+        torch.Tensor: Tensor with heads merged into the feature axis, shape
+            ``(..., L, num_heads * d_head)``.
     """
     return t.transpose(-3, -2).flatten(-2)
 
@@ -44,19 +49,27 @@ def _scaled_dot_product_attention(
     attn_dropout: float,
     training: bool,
 ) -> torch.Tensor:
-    """Scaled dot product attention for neural network architectures and reusable model components.
+    """Run scaled dot-product attention through PyTorch's fused SDPA kernel.
 
     Args:
-        q_h (torch.Tensor): The q h value.
-        k_h (torch.Tensor): The k h value.
-        v_h (torch.Tensor): The v h value.
-        scale (float): The scale value.
-        mask (torch.Tensor | None): The mask value.
-        attn_dropout (float): The attn dropout value.
-        training (bool): The training value.
+        q_h (torch.Tensor): Per-head queries, shape
+            ``(..., num_heads, L_q, d_head)``.
+        k_h (torch.Tensor): Per-head keys, shape
+            ``(..., num_heads, L_k, d_head)``.
+        v_h (torch.Tensor): Per-head values, shape
+            ``(..., num_heads, L_k, d_v)``.
+        scale (float): Multiplicative softmax scale applied before exponentiating
+            the logits (typically ``1 / sqrt(d_head)``).
+        mask (torch.Tensor | None): Attention mask broadcastable to
+            ``(..., L_q, L_k)``. A leading head axis is added automatically when
+            the mask is one rank short. ``None`` disables masking.
+        attn_dropout (float): Dropout probability applied to the attention
+            weights when ``training`` is ``True``.
+        training (bool): When ``False`` the dropout probability is ignored
+            (eval-mode behaviour).
 
     Returns:
-        torch.Tensor: The computed or requested result.
+        torch.Tensor: Attention output, shape ``(..., num_heads, L_q, d_v)``.
     """
     if mask is not None and mask.dim() == q_h.dim() - 1:
         mask = mask.unsqueeze(-3)
@@ -71,14 +84,12 @@ def _scaled_dot_product_attention(
 
 
 def _init_linear(linear: torch.nn.Linear, *, bias: bool) -> None:
-    """Init linear for neural network architectures and reusable model components.
+    """Initialize a linear layer with Xavier-uniform weights and zeroed bias.
 
     Args:
-        linear (torch.nn.Linear): The linear value.
-        bias (bool): The bias value.
-
-    Returns:
-        None: This function does not return a value.
+        linear (torch.nn.Linear): Layer to initialize in place.
+        bias (bool): Whether ``linear`` has a learned bias term that should be
+            zero-initialized.
     """
     torch.nn.init.xavier_uniform_(linear.weight)
     if bias:
@@ -92,16 +103,20 @@ def _build_transformer_ffn(
     ff_dropout: float,
     bias: bool,
 ) -> torch.nn.Sequential:
-    """Build the transformer ffn.
+    """Build the standard transformer position-wise feed-forward sub-block.
+
+    The block is ``Linear → GELU → Dropout → Linear → Dropout`` and its
+    ``nn.Linear`` layers are initialized via :func:`_init_linear`.
 
     Args:
-        d_model (int): The d model value.
-        ff_hidden_dim (int): The ff hidden dim value.
-        ff_dropout (float): The ff dropout value.
-        bias (bool): The bias value.
+        d_model (int): Input and output feature dimension.
+        ff_hidden_dim (int): Width of the inner hidden layer.
+        ff_dropout (float): Dropout probability applied after both linear
+            projections.
+        bias (bool): Whether the linear projections include a bias term.
 
     Returns:
-        torch.nn.Sequential: The computed or requested result.
+        torch.nn.Sequential: The assembled feed-forward module.
     """
     ffn = torch.nn.Sequential(
         torch.nn.Linear(d_model, ff_hidden_dim, bias=bias),
@@ -121,17 +136,21 @@ def _build_transformer_ffn(
 # ---------------------------------------------------------------------------
 
 def _sinusoidal_pos_encoding(T: int, d: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-    """Sinusoidal positional encoding, shape (T, d).
-    Position 0 = oldest token, T-1 = newest token.
+    """Build a fixed sinusoidal positional encoding of shape ``(T, d)``.
+
+    Position ``0`` represents the oldest token and position ``T - 1`` the
+    newest, matching the temporal convention used throughout the codebase.
 
     Args:
-        T (int): The t value.
-        d (int): The d value.
-        device (torch.device): The device value.
-        dtype (torch.dtype): The dtype value.
+        T (int): Sequence length / number of positions.
+        d (int): Encoding feature dimension.
+        device (torch.device): Device on which to allocate the encoding.
+        dtype (torch.dtype): Floating-point dtype of the encoding.
 
     Returns:
-        torch.Tensor: The computed or requested result.
+        torch.Tensor: Positional encoding of shape ``(T, d)`` with even
+            channels carrying sine components and odd channels cosine
+            components.
     """
     pos   = torch.arange(T, dtype=dtype, device=device).unsqueeze(1)   # (T, 1)
     n_sin = (d + 1) // 2
@@ -149,16 +168,21 @@ def _sinusoidal_pos_encoding(T: int, d: int, device: torch.device, dtype: torch.
 # ---------------------------------------------------------------------------
 
 def _build_causal_mask(T: int, W: int | None, device: torch.device) -> torch.Tensor:
-    """Bool causal mask of shape (T, T). True = attend, False = mask out.
-    mask[t, s] = True iff s <= t (causal) and t - s < W (window cap, when W < T).
+    """Build a boolean causal (and optionally windowed) attention mask.
+
+    ``mask[t, s]`` is ``True`` (attend) iff ``s <= t`` (causality) and
+    ``t - s < W`` (sliding window). When ``W is None`` or ``W >= T`` the mask
+    is purely causal.
 
     Args:
-        T (int): The t value.
-        W (int | None): The w value.
-        device (torch.device): The device value.
+        T (int): Sequence length, i.e. mask side length.
+        W (int | None): Sliding-window size in tokens. ``None`` (or any value
+            ``>= T``) disables the window and keeps the mask fully causal.
+        device (torch.device): Device on which to build the mask.
 
     Returns:
-        torch.Tensor: The computed or requested result.
+        torch.Tensor: Boolean mask of shape ``(T, T)`` where ``True`` means the
+            query at row ``t`` should attend to the key at column ``s``.
     """
     idx  = torch.arange(T, device=device)
     row  = idx.unsqueeze(1)   # (T, 1)

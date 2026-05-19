@@ -1,4 +1,114 @@
-"""Discrete utilities for trading environment state, action, reward, and simulation logic."""
+r"""Long-only discrete-action multi-currency trading environment (toggle).
+
+Cash is allocated across $N$ assets through a binary toggle: each
+non-hold action either spends *all* cash on the target asset or sells
+*all* held units of it. There is no size discretisation and no shorting.
+
+State space
+===========
+
+The flat state vector has dimension
+
+$$
+\dim(\mathcal{S}) = 3 M N + 4 N + 8.
+$$
+
+It is the concatenation
+
+$$
+s_t = \big[\, t_{\text{vec}},\; p_{\text{rel}},\; \eta,\;
+x_{\text{rel}},\; c_{\text{rel}},\; \rho_t,\; v_{\text{rel}},\;
+m,\; \text{vol}_{\text{rel}} \,\big].
+$$
+
+with shapes
+
+$$
+t_{\text{vec}} \in \mathbb{R}^{6},\;
+p_{\text{rel}} \in \mathbb{R}^{M\times N},\;
+\eta \in \mathbb{R}^{N},\;
+x_{\text{rel}} \in \mathbb{R}^{N+1},\;
+c_{\text{rel}} \in \mathbb{R}^{N},\;
+\rho_t \in \mathbb{R},
+$$
+
+$$
+v_{\text{rel}} \in \mathbb{R}^{M\times N},\;
+m \in \mathbb{R}^{N},\;
+\text{vol}_{\text{rel}} \in \mathbb{R}^{M\times N}.
+$$
+
+For EMA time constants $\tau_m$:
+
+$$
+p_{\text{rel}, m, k} = \frac{p_k - \bar p_{m,k}}{\bar p_{m,k}},\qquad
+\text{vol}_{\text{rel}, m, k} = \frac{\eta_k - \bar\eta_{m,k}}{\bar\eta_{m,k}},
+$$
+
+$$
+v_{\text{rel}, m, k} = \frac{v_k - \bar v_{m,k}}{\bar v_{m,k}},\qquad
+\eta_k = \frac{h_k - l_k}{p_k}.
+$$
+
+Portfolio features use $V_t = C_t + \sum_k w_k p_k$:
+
+$$
+x_{\text{rel}} = \Big[\,\tfrac{C_t}{V_t},\, \tfrac{w_1 p_1}{V_t},\,
+\dots,\, \tfrac{w_N p_N}{V_t}\,\Big],\qquad
+c_{\text{rel}, k} = \frac{I_k}{S_t + \varepsilon},\qquad
+\rho_t = \frac{S_t}{S_t + C_t},
+$$
+
+with $S_t = \sum_k I_k$ the total committed capital. Unrealised
+after-tax PnL per held position:
+
+$$
+m_k =
+\begin{cases}
+\dfrac{w_k (p_k - \bar p^{\text{ent}}_k) - \tau\,[w_k(p_k - \bar p^{\text{ent}}_k)]_+ - \phi_{\text{s}}}{I_k},
+& w_k > 0,\\[1.2ex]
+0, & \text{flat}.
+\end{cases}
+$$
+
+Action space
+============
+
+The discrete action $a \in \{0, 1, \dots, N\}$ is
+
+$$
+a =
+\begin{cases}
+0 & \text{hold},\\
+1 \dots N & \text{toggle asset } k = a - 1.
+\end{cases}
+$$
+
+Toggle semantics: if $w_k > 0$ sell *all* units of $k$ (subject to fee
+$\phi_{\text{s}}$ and tax $\tau$ on realised gains); otherwise spend
+*all* available cash $C_t$ on $k$ (subject to fee $\phi_{\text{b}}$ and
+minimum order $A_{\min}$). Action cardinality is $1 + N$.
+
+Reward
+======
+
+Realised-ROI reward when sells occur, otherwise log-return or simple
+return on portfolio value:
+
+$$
+r_t =
+\begin{cases}
+\lambda_{\text{roi}} \dfrac{\sum_k \text{PnL}^{\text{real}}_k}
+                           {\sum_k \text{Cost}^{\text{real}}_k}
+& \sum_k \text{Cost}^{\text{real}}_k > \varepsilon,\\[1.4ex]
+\lambda_{\text{val}}\,\log(V_t / V_{t-1}) & \text{reward\_mode = \texttt{log}},\\[0.3ex]
+\lambda_{\text{val}}\,(V_t - V_{t-1})/V_{t-1} & \text{reward\_mode = \texttt{return}}.
+\end{cases}
+$$
+
+Termination on bankruptcy ($V_t \le V_{\text{bk}}$) adds the penalty
+$-\lambda_{\text{done}}$.
+"""
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
@@ -42,7 +152,7 @@ class State:
 
 class StateHistory:
     """StateHistory implementation for trading environment state, action, reward, and simulation logic."""
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the instance.
 
         Returns:
@@ -50,7 +160,7 @@ class StateHistory:
         """
         self.states: list[State] = []
 
-    def append(self, state: State):
+    def append(self, state: State) -> None:
         """Append for StateHistory.
 
         Args:
@@ -170,7 +280,7 @@ class MultiCurrencyEnv:
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -478,7 +588,7 @@ class MultiCurrencyEnv:
     # reset / update
     # -------------------------------------------------------------------------
 
-    def reset(self, data: dict, C0: Optional[float] = None) -> State:
+    def reset(self, data: dict, C0: Optional[float] | None = None) -> State:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -744,7 +854,7 @@ class BatchedMultiCurrencyEnv:
         done_reward_penalty: float = 1.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -866,7 +976,7 @@ class BatchedMultiCurrencyEnv:
         low: torch.Tensor,      # (B, N)
         volume: torch.Tensor,   # (B, N)
         time: torch.Tensor,     # (B,) float timestamps
-        C0: Optional[float] = None,
+        C0: Optional[float] | None = None,
     ) -> torch.Tensor:
         """Reset internal state for a new episode or stream.
 

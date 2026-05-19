@@ -1,4 +1,75 @@
-"""Longshort leverage utilities for trading environment state, action, reward, and simulation logic."""
+r"""Hybrid-action long/short multi-currency environment with fixed leverage.
+
+Extends [src.environment.generic.longshort](longshort.html) by introducing a
+fixed maximum leverage $\ell_{\max}$ and a maintenance-margin
+liquidation rule. Posted collateral $I_k$ is now interpreted as
+*margin*, not gross exposure, so gross notional per asset can scale up
+to $\ell_{\max} I_k$.
+
+State space
+===========
+
+The flat state vector has dimension
+
+$$
+\dim(\mathcal{S}) = 4 M N + 9 N + 10,
+$$
+
+with the same per-asset block as the unleveraged env and two extra
+global features for leverage diagnostics:
+
+$$
+\text{globals}_t =
+\big[\, t_{\text{vec}},\; c_{\text{rel}},\; \rho_t,\;
+\ell^{\mathrm g}_t,\; b_t \,\big],
+\qquad
+\ell^{\mathrm g}_t, b_t \in \mathbb{R}.
+$$
+
+Gross leverage is
+
+$$
+\ell^{\mathrm g}_t =
+\frac{\sum_k |u_k| p_k}{V_t},
+\qquad
+V_t = C_t + \sum_k u_k p_k - \text{(unrealised loss reserve)},
+$$
+
+and the margin buffer
+
+$$
+b_t = \frac{V_t - \mu \sum_k |u_k| p_k}{V_t}
+$$
+
+measures distance to liquidation under maintenance-margin ratio
+$\mu \in (0, 1)$. By default $\mu = 0.5 / \ell_{\max}$. The agent is
+liquidated when $b_t \le 0$.
+
+See [src.environment.generic.longshort](longshort.html) for the per-asset
+block and candle feature definitions; they are inherited unchanged.
+
+Action space
+============
+
+Identical to the unleveraged env (hybrid discrete + continuous):
+
+$$
+a^{\mathrm d} \in \{0, 1, \dots, 3N\},\qquad a^{\mathrm c} \in [0, 1].
+$$
+
+Opening commits $a^{\mathrm c} \cdot C_t$ of cash as *margin*, taking on
+gross notional $\ell_{\max} \cdot a^{\mathrm c} \cdot C_t$ on the target
+asset. Closing reduces the position by $a^{\mathrm c} \cdot |u_k|$
+units.
+
+Reward and termination
+======================
+
+Reward modes match the unleveraged env. The episode terminates either
+on bankruptcy ($V_t \le V_{\text{bk}}$) or on maintenance-margin
+breach ($b_t \le 0$), in both cases applying the penalty
+$-\lambda_{\text{done}}$.
+"""
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
@@ -75,7 +146,7 @@ class State:
 
 class StateHistory:
     """StateHistory implementation for trading environment state, action, reward, and simulation logic."""
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the instance.
 
         Returns:
@@ -83,7 +154,7 @@ class StateHistory:
         """
         self.states: list[State] = []
 
-    def append(self, state: State):
+    def append(self, state: State) -> None:
         """Append for StateHistory.
 
         Args:
@@ -277,7 +348,7 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         dtype: torch.dtype = torch.float32,
         device: str | torch.device | None = None,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -416,7 +487,7 @@ class LeveragedMultiCurrencyEnv(MultiCurrencyEnv):
         low=None,
         volume=None,
         time=None,
-        C0: Optional[float] = None,
+        C0: Optional[float] | None = None,
         open_=None,
         *,
         data: dict | None = None,
@@ -767,7 +838,7 @@ class BatchedLeveragedMultiCurrencyEnv(BatchedMultiCurrencyEnv):
         dtype: torch.dtype = torch.float32,
         device: str | torch.device | None = None,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:

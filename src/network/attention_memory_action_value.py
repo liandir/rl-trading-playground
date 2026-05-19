@@ -1,4 +1,5 @@
 """Attention memory action value utilities for neural network architectures and reusable model components."""
+from collections.abc import Callable
 import torch
 
 from src.network.core.attention import ResidualSelfAttentionBlock
@@ -106,11 +107,11 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
         hidden_dims_per_asset_head=None,
         aux_horizons: tuple | None = None,
         hidden_dims_aux=None,
-        activation=torch.tanh,
-        recurrent_activation=torch.tanh,
+        activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
+        recurrent_activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -136,8 +137,8 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
             hidden_dims_per_asset_head (Any): The hidden dims per asset head value. Defaults to ``None``.
             aux_horizons (tuple | None): The aux horizons value. Defaults to ``None``.
             hidden_dims_aux (Any): The hidden dims aux value. Defaults to ``None``.
-            activation (Any): The activation value. Defaults to ``torch.tanh``.
-            recurrent_activation (Any): The recurrent activation value. Defaults to ``torch.tanh``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.tanh``.
+            recurrent_activation (Callable[[torch.Tensor], torch.Tensor]): The recurrent activation value. Defaults to ``torch.tanh``.
             recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
             recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
 
@@ -384,7 +385,7 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
             ),
         }
 
-    def reset(self, batch_size: int = 1):
+    def reset(self, batch_size: int = 1) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -518,7 +519,7 @@ class AttentionMemoryActionValueNetwork(torch.nn.Module):
             rec_state = self.recurrent.get_state(clone=clone, detach=detach)
         return {"recurrent": rec_state}
 
-    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:

@@ -56,7 +56,7 @@ class LongShortHierarchicalLeverageEnv(LeveragedMultiCurrencyEnv):
         dtype: torch.dtype = torch.float32,
         device: str | torch.device | None = None,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -278,7 +278,7 @@ class BatchedLongShortHierarchicalLeverageEnv(BatchedLeveragedMultiCurrencyEnv):
         dtype: torch.dtype = torch.float32,
         device: str | torch.device | None = None,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:

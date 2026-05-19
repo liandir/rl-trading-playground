@@ -38,7 +38,7 @@ class CrossAttention(torch.nn.Module):
         d_head: int | None = None,
         attn_dropout: float = 0.0,
         bias: bool = True,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -151,7 +151,7 @@ class SelfAttention(torch.nn.Module):
         d_head: int | None = None,
         attn_dropout: float = 0.0,
         bias: bool = True,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -254,7 +254,7 @@ class ResidualCrossAttentionBlock(torch.nn.Module):
         attn_dropout: float = 0.0,
         ff_dropout: float = 0.0,
         bias: bool = True,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -336,7 +336,7 @@ class ResidualSelfAttentionBlock(torch.nn.Module):
         attn_dropout: float = 0.0,
         ff_dropout: float = 0.0,
         bias: bool = True,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:

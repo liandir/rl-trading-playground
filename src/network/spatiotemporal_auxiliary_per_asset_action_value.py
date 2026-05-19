@@ -1,4 +1,5 @@
 """Spatiotemporal auxiliary per asset action value utilities for neural network architectures and reusable model components."""
+from collections.abc import Callable
 import torch
 
 from src.network.core.attention import ResidualSelfAttentionBlock
@@ -58,10 +59,10 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
         combine_mode: str = "concat",
         aux_horizons: tuple = (1, 5, 20),
         activation=torch.nn.GELU(),
-        recurrent_activation=torch.tanh,
+        recurrent_activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
         recurrent_type: str = "gru",
         recurrent_kwargs: dict | None = None,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -89,7 +90,7 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
             combine_mode (str): The combine mode value. Defaults to ``'concat'``.
             aux_horizons (tuple): The aux horizons value. Defaults to ``(1, 5, 20)``.
             activation (Any): The activation value. Defaults to ``torch.nn.GELU()``.
-            recurrent_activation (Any): The recurrent activation value. Defaults to ``torch.tanh``.
+            recurrent_activation (Callable[[torch.Tensor], torch.Tensor]): The recurrent activation value. Defaults to ``torch.tanh``.
             recurrent_type (str): The recurrent type value. Defaults to ``'gru'``.
             recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
 
@@ -287,7 +288,7 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
     # state management
     # ------------------------------------------------------------------
 
-    def reset(self, batch_size: int = 1):
+    def reset(self, batch_size: int = 1) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -323,7 +324,7 @@ class SpatiotemporalAuxiliaryPerAssetActionValueNetwork(torch.nn.Module):
             if clone:  buf = buf.clone()
         return {"recurrent": rec, "buffer": buf}
 
-    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:

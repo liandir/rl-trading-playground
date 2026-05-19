@@ -1,4 +1,80 @@
-"""Discrete log utilities for trading environment state, action, reward, and simulation logic."""
+r"""Long-only discrete-action environment with log-space market features.
+
+Combines the toggle action space of
+[discrete.py](discrete.html) with a log-space feature set (v02). All
+multi-scale market features are expressed in log domain so that they
+are scale-free and approximately stationary across price regimes.
+
+State space
+===========
+
+The flat state vector has dimension
+
+$$
+\dim(\mathcal{S}) = 3 M N + 7 N + 8.
+$$
+
+Layout:
+
+$$
+s_t = \big[\, t_{\text{vec}},\; r^{\log}_t,\; \zeta_t,\; \beta_t,\;
+p_{\text{rel}},\; \eta^{\log},\; \text{vol}_{\text{rel}},\; v_{\text{rel}},\;
+x_{\text{rel}},\; \rho_t,\; \mathbb{1}_{\text{pos}},\; m \,\big].
+$$
+
+Per-bar log features ($N$-dim each):
+
+$$
+r^{\log}_{t,k} = \log\!\frac{p_k(t)}{p_k(t-\Delta t)},\quad
+\zeta_{t,k} = \frac{p_k - l_k}{h_k - l_k + \varepsilon},\quad
+\beta_{t,k} = \frac{p_k - o_k}{\tfrac12(p_k + o_k)},
+$$
+
+with $\zeta_k \in [0, 1]$ encoding close position within the bar and
+$\beta_k$ the relative bar body.
+
+Multi-scale log features (each in $\mathbb{R}^{M\times N}$):
+
+$$
+p_{\text{rel}, m, k} = \log\!\frac{p_k}{\bar p_{m,k}},\qquad
+v_{\text{rel}, m, k} = \log\!\frac{v_k}{\bar v_{m,k}},\qquad
+\text{vol}_{\text{rel}, m, k} =
+\frac{\eta_k - \bar\eta_{m,k}}{\bar\eta_{m,k}},
+$$
+
+with $\eta_k = h_k - l_k$ the bar range. The longest-scale baseline
+gives
+
+$$
+\eta^{\log}_k = \log\!\frac{\eta_k}{\bar\eta_{M,k}}.
+$$
+
+Portfolio block: $x_{\text{rel}} \in \mathbb{R}^{N+1}$ (cash + value
+weights), $\rho_t \in \mathbb{R}$ (invested fraction),
+$\mathbb{1}_{\text{pos}, k} \in \{0, 1\}$ (position indicator),
+$m \in \mathbb{R}^{N}$ (unrealised after-tax PnL / invested cost).
+
+Action space
+============
+
+Toggle:
+
+$$
+a \in \{0, 1, \dots, N\},\qquad
+a =
+\begin{cases}
+0 & \text{hold},\\
+1 \dots N & \text{toggle asset } k = a - 1,
+\end{cases}
+$$
+
+with the same buy-all / sell-all semantics as
+[discrete.py](discrete.html). Action cardinality $1 + N$.
+
+Reward and termination match the toggle env: realised-ROI when sells
+occur, otherwise log or simple portfolio return; bankruptcy ends the
+episode with penalty $-\lambda_{\text{done}}$.
+"""
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
@@ -52,7 +128,7 @@ class State:
 
 class StateHistory:
     """StateHistory implementation for trading environment state, action, reward, and simulation logic."""
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the instance.
 
         Returns:
@@ -60,7 +136,7 @@ class StateHistory:
         """
         self.states: list[State] = []
 
-    def append(self, state: State):
+    def append(self, state: State) -> None:
         """Append for StateHistory.
 
         Args:
@@ -133,7 +209,7 @@ class MultiCurrencyEnv:
         done_reward_penalty: float = 10.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -353,7 +429,7 @@ class MultiCurrencyEnv:
     # reset / update
     # -------------------------------------------------------------------------
 
-    def reset(self, data: dict, C0: Optional[float] = None) -> State:
+    def reset(self, data: dict, C0: Optional[float] | None = None) -> State:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -675,7 +751,7 @@ class BatchedMultiCurrencyEnv:
         done_reward_penalty: float = 10.0,
         dtype: torch.dtype = torch.float32,
         eps: float = 1e-8,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -788,7 +864,7 @@ class BatchedMultiCurrencyEnv:
         low:    torch.Tensor,   # (B, N)
         volume: torch.Tensor,   # (B, N)
         time:   torch.Tensor,   # (B,)
-        C0: Optional[float] = None,
+        C0: Optional[float] | None = None,
     ) -> torch.Tensor:
         """Reset internal state for a new episode or stream.
 

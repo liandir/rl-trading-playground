@@ -22,16 +22,16 @@ class AuxiliaryPerAssetActionValueNetwork(BaseFlatPerAssetActionValueNetwork):
     def __init__(
         self,
         *args,
-        aux_horizons=(1, 5, 20),
+        aux_horizons: tuple = (1, 5, 20),
         hidden_dims_aux=None,
         critic_type: str = "v",
         **kwargs,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
             *args (Any): The args value.
-            aux_horizons (Any): The aux horizons value. Defaults to ``(1, 5, 20)``.
+            aux_horizons (tuple): The aux horizons value. Defaults to ``(1, 5, 20)``.
             hidden_dims_aux (Any): The hidden dims aux value. Defaults to ``None``.
             critic_type (str): The critic type value. Defaults to ``'v'``.
             **kwargs (Any): The kwargs value.

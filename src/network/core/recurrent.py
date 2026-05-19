@@ -1,5 +1,7 @@
 """Recurrent utilities for neural network architectures and reusable model components."""
 import math
+from collections.abc import Callable, Iterable
+
 import torch
 
 RecurrentState = torch.Tensor | dict[str, torch.Tensor]
@@ -100,11 +102,11 @@ def _restore_trace_tensor(
     return out.to(device=device, dtype=dtype)
 
 
-def _collect_plastic_modules(modules) -> list[torch.nn.Module]:
+def _collect_plastic_modules(modules: Iterable[torch.nn.Module]) -> list[torch.nn.Module]:
     """Collect plastic modules for neural network architectures and reusable model components.
 
     Args:
-        modules (Any): The modules value.
+        modules (Iterable[torch.nn.Module]): The modules value.
 
     Returns:
         list[torch.nn.Module]: The computed or requested result.
@@ -113,7 +115,7 @@ def _collect_plastic_modules(modules) -> list[torch.nn.Module]:
 
 
 def _apply_online_updates(
-    modules,
+    modules: Iterable[torch.nn.Module],
     loss: torch.Tensor,
     *,
     retain_graph: bool = False,
@@ -121,7 +123,7 @@ def _apply_online_updates(
     """Apply online updates for neural network architectures and reusable model components.
 
     Args:
-        modules (Any): The modules value.
+        modules (Iterable[torch.nn.Module]): The modules value.
         loss (torch.Tensor): The loss value.
         retain_graph (bool): The retain graph value. Defaults to ``False``.
 
@@ -170,13 +172,18 @@ class RecurrentCell(torch.nn.Module):
     """
     _ACT_TO_NONLINEARITY = {torch.tanh: "tanh", torch.relu: "relu"}
 
-    def __init__(self, n_in, n_out, act=torch.tanh):
+    def __init__(
+        self,
+        n_in: int,
+        n_out: int,
+        act: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
+    ) -> None:
         """Initialize the instance.
 
         Args:
-            n_in (Any): The n in value.
-            n_out (Any): The n out value.
-            act (Any): The act value. Defaults to ``torch.tanh``.
+            n_in (int): The n in value.
+            n_out (int): The n out value.
+            act (Callable[[torch.Tensor], torch.Tensor]): The act value. Defaults to ``torch.tanh``.
 
         Returns:
             None: This function does not return a value.
@@ -199,13 +206,18 @@ class RecurrentCell(torch.nn.Module):
         torch.nn.init.zeros_(self.rnn.bias_ih_l0)
         torch.nn.init.zeros_(self.rnn.bias_hh_l0)
 
-    def reset(self, batch_size: int = 1, device: torch.device = None, dtype: torch.dtype = None):
+    def reset(
+        self,
+        batch_size: int = 1,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
             batch_size (int): The batch size value. Defaults to ``1``.
-            device (torch.device): The device value. Defaults to ``None``.
-            dtype (torch.dtype): The dtype value. Defaults to ``None``.
+            device (torch.device | None): The device value. Defaults to ``None``.
+            dtype (torch.dtype | None): The dtype value. Defaults to ``None``.
 
         Returns:
             None: This function does not return a value.
@@ -268,7 +280,7 @@ class RecurrentCell(torch.nn.Module):
             s = s.clone()
         return s
 
-    def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True):
+    def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True) -> None:
         """Restore the current state snapshot.
 
         Args:
@@ -314,21 +326,21 @@ class GradientOjaRecurrentCell(torch.nn.Module):
 
     def __init__(
         self,
-        n_in,
-        n_out,
-        act=torch.tanh,
+        n_in: int,
+        n_out: int,
+        act: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
         eta: float = 1e-3,
         lambda_: float = 1e-4,
         alpha: float = 1.0,
         nu: float = 0.1,
         wclip: float | None = None,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
-            n_in (Any): The n in value.
-            n_out (Any): The n out value.
-            act (Any): The act value. Defaults to ``torch.tanh``.
+            n_in (int): The n in value.
+            n_out (int): The n out value.
+            act (Callable[[torch.Tensor], torch.Tensor]): The act value. Defaults to ``torch.tanh``.
             eta (float): The eta value. Defaults to ``0.001``.
             lambda_ (float): The lambda value. Defaults to ``0.0001``.
             alpha (float): The alpha value. Defaults to ``1.0``.
@@ -370,13 +382,18 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         torch.nn.init.orthogonal_(self.w_rec.weight)
         torch.nn.init.orthogonal_(self.w_ext.weight)
 
-    def reset(self, batch_size: int = 1, device: torch.device = None, dtype: torch.dtype = None):
+    def reset(
+        self,
+        batch_size: int = 1,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
             batch_size (int): The batch size value. Defaults to ``1``.
-            device (torch.device): The device value. Defaults to ``None``.
-            dtype (torch.dtype): The dtype value. Defaults to ``None``.
+            device (torch.device | None): The device value. Defaults to ``None``.
+            dtype (torch.dtype | None): The dtype value. Defaults to ``None``.
 
         Returns:
             None: This function does not return a value.
@@ -388,14 +405,14 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         self._last_prev_state = None
         self._last_output = None
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Compute the forward pass.
 
         Args:
-            x (Any): The x value.
+            x (torch.Tensor): The x value.
 
         Returns:
-            Any: The computed or requested result.
+            torch.Tensor: The computed or requested result.
         """
         if self.state is None or self.state.shape[0] != x.shape[0]:
             self.reset(batch_size=x.shape[0], device=x.device, dtype=x.dtype)
@@ -444,7 +461,7 @@ class GradientOjaRecurrentCell(torch.nn.Module):
             s = s.clone()
         return s
 
-    def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True):
+    def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True) -> None:
         """Restore the current state snapshot.
 
         Args:
@@ -481,7 +498,12 @@ class GradientOjaRecurrentCell(torch.nn.Module):
             "y": _copy_trace_tensor(self._last_output, device=self.b.device, dtype=self.b.dtype, clone=clone, detach=detach),
         }
 
-    def set_online_trace(self, trace: dict[str, torch.Tensor] | None, clone: bool = True, detach: bool = True):
+    def set_online_trace(
+        self,
+        trace: dict[str, torch.Tensor] | None,
+        clone: bool = True,
+        detach: bool = True,
+    ) -> None:
         """Set the online trace.
 
         Args:
@@ -505,7 +527,7 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         """
         return (self.w_ext.weight, self.w_rec.weight, self.b)
 
-    def _update_grad_ema(self, ema: torch.Tensor, grad: torch.Tensor | None):
+    def _update_grad_ema(self, ema: torch.Tensor, grad: torch.Tensor | None) -> None:
         """Update grad ema for GradientOjaRecurrentCell.
 
         Args:
@@ -545,11 +567,16 @@ class GradientOjaRecurrentCell(torch.nn.Module):
         term = y.unsqueeze(-1) * (alpha * x.unsqueeze(1) - proj.unsqueeze(-1) * weight.unsqueeze(0))
         return term.mean(dim=0)
 
-    def apply_online_gradients(self, gradients, *, error_t: torch.Tensor):
+    def apply_online_gradients(
+        self,
+        gradients: tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None],
+        *,
+        error_t: torch.Tensor,
+    ) -> None:
         """Apply online gradients for GradientOjaRecurrentCell.
 
         Args:
-            gradients (Any): The gradients value.
+            gradients (tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]): The gradients value.
             error_t (torch.Tensor): The error t value.
 
         Returns:
@@ -607,12 +634,12 @@ class GRURecurrentCell(torch.nn.Module):
     the temporal recurrence mathematically identical while avoiding a Python
     loop.
     """
-    def __init__(self, n_in, n_out):
+    def __init__(self, n_in: int, n_out: int) -> None:
         """Initialize the instance.
 
         Args:
-            n_in (Any): The n in value.
-            n_out (Any): The n out value.
+            n_in (int): The n in value.
+            n_out (int): The n out value.
 
         Returns:
             None: This function does not return a value.
@@ -629,13 +656,18 @@ class GRURecurrentCell(torch.nn.Module):
         torch.nn.init.zeros_(self.gru.bias_ih_l0)
         torch.nn.init.zeros_(self.gru.bias_hh_l0)
 
-    def reset(self, batch_size: int = 1, device: torch.device = None, dtype: torch.dtype = None):
+    def reset(
+        self,
+        batch_size: int = 1,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
             batch_size (int): The batch size value. Defaults to ``1``.
-            device (torch.device): The device value. Defaults to ``None``.
-            dtype (torch.dtype): The dtype value. Defaults to ``None``.
+            device (torch.device | None): The device value. Defaults to ``None``.
+            dtype (torch.dtype | None): The dtype value. Defaults to ``None``.
 
         Returns:
             None: This function does not return a value.
@@ -705,7 +737,7 @@ class GRURecurrentCell(torch.nn.Module):
             s = s.clone()
         return s
 
-    def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True):
+    def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True) -> None:
         """Restore the current state snapshot.
 
         Args:
@@ -763,9 +795,9 @@ class LMUCell(torch.nn.Module):
         n_out: int,
         memory_size: int,
         theta: float,
-        act=torch.tanh,
+        act: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
         learn_a_b: bool = False,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -773,7 +805,7 @@ class LMUCell(torch.nn.Module):
             n_out (int): The n out value.
             memory_size (int): The memory size value.
             theta (float): The theta value.
-            act (Any): The act value. Defaults to ``torch.tanh``.
+            act (Callable[[torch.Tensor], torch.Tensor]): The act value. Defaults to ``torch.tanh``.
             learn_a_b (bool): The learn a b value. Defaults to ``False``.
 
         Returns:
@@ -825,7 +857,7 @@ class LMUCell(torch.nn.Module):
         torch.nn.init.xavier_uniform_(self.w_hu.weight)
 
     @staticmethod
-    def _make_continuous_lmu_matrices(memory_size: int, theta: float):
+    def _make_continuous_lmu_matrices(memory_size: int, theta: float) -> tuple[torch.Tensor, torch.Tensor]:
         """Create the continuous lmu matrices.
 
         Args:
@@ -833,7 +865,7 @@ class LMUCell(torch.nn.Module):
             theta (float): The theta value.
 
         Returns:
-            Any: The computed or requested result.
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
         """
         q = memory_size
         A = torch.zeros(q, q, dtype=torch.float32)
@@ -848,7 +880,7 @@ class LMUCell(torch.nn.Module):
         return A, B
 
     @staticmethod
-    def _discretize_zoh(A: torch.Tensor, B: torch.Tensor, dt: float = 1.0):
+    def _discretize_zoh(A: torch.Tensor, B: torch.Tensor, dt: float = 1.0) -> tuple[torch.Tensor, torch.Tensor]:
         """Discretize zoh for LMUCell.
 
         Args:
@@ -857,7 +889,7 @@ class LMUCell(torch.nn.Module):
             dt (float): The dt value. Defaults to ``1.0``.
 
         Returns:
-            Any: The computed or requested result.
+            tuple[torch.Tensor, torch.Tensor]: The computed or requested result.
         """
         q = A.shape[0]
         device = A.device
@@ -868,13 +900,18 @@ class LMUCell(torch.nn.Module):
         Md = torch.matrix_exp(M * dt)
         return Md[:q, :q], Md[:q, q:]
 
-    def reset(self, batch_size: int = 1, device: torch.device = None, dtype: torch.dtype = None):
+    def reset(
+        self,
+        batch_size: int = 1,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
             batch_size (int): The batch size value. Defaults to ``1``.
-            device (torch.device): The device value. Defaults to ``None``.
-            dtype (torch.dtype): The dtype value. Defaults to ``None``.
+            device (torch.device | None): The device value. Defaults to ``None``.
+            dtype (torch.dtype | None): The dtype value. Defaults to ``None``.
 
         Returns:
             None: This function does not return a value.
@@ -938,7 +975,12 @@ class LMUCell(torch.nn.Module):
             m, h = m.clone(), h.clone()
         return {"memory": m, "hidden": h}
 
-    def set_state(self, state: dict[str, torch.Tensor], clone: bool = True, detach: bool = True):
+    def set_state(
+        self,
+        state: dict[str, torch.Tensor],
+        clone: bool = True,
+        detach: bool = True,
+    ) -> None:
         """Restore the current state snapshot.
 
         Args:
@@ -997,17 +1039,17 @@ class ParallelRecurrentCell(torch.nn.Module):
         n_in,
         n_out,
         rec_dim=None,
-        rec_act=torch.tanh,
-        lin_act=torch.relu,
-    ):
+        rec_act: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
+        lin_act: Callable[[torch.Tensor], torch.Tensor] = torch.relu,
+    ) -> None:
         """Initialize the instance.
 
         Args:
             n_in (Any): The n in value.
             n_out (Any): The n out value.
             rec_dim (Any): The rec dim value. Defaults to ``None``.
-            rec_act (Any): The rec act value. Defaults to ``torch.tanh``.
-            lin_act (Any): The lin act value. Defaults to ``torch.relu``.
+            rec_act (Callable[[torch.Tensor], torch.Tensor]): The rec act value. Defaults to ``torch.tanh``.
+            lin_act (Callable[[torch.Tensor], torch.Tensor]): The lin act value. Defaults to ``torch.relu``.
 
         Returns:
             None: This function does not return a value.
@@ -1039,7 +1081,7 @@ class ParallelRecurrentCell(torch.nn.Module):
         torch.nn.init.xavier_uniform_(self.w_lin.weight)
         torch.nn.init.zeros_(self.w_lin.bias)
 
-    def reset(self, batch_size: int = 1, device=None, dtype=None):
+    def reset(self, batch_size: int = 1, device=None, dtype=None) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -1107,7 +1149,7 @@ class ParallelRecurrentCell(torch.nn.Module):
             s = s.clone()
         return s
 
-    def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True):
+    def set_state(self, state: torch.Tensor, clone: bool = True, detach: bool = True) -> None:
         """Restore the current state snapshot.
 
         Args:
@@ -1208,19 +1250,19 @@ class RecurrentNetwork(torch.nn.Module):
         n_in,
         n_out,
         hidden_dims=None,
-        activation=torch.tanh,
-        out_act=torch.nn.Identity(),
+        activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
+        out_act: torch.nn.Module = torch.nn.Identity(),
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
             n_in (Any): The n in value.
             n_out (Any): The n out value.
             hidden_dims (Any): The hidden dims value. Defaults to ``None``.
-            activation (Any): The activation value. Defaults to ``torch.tanh``.
-            out_act (Any): The out act value. Defaults to ``torch.nn.Identity()``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.tanh``.
+            out_act (torch.nn.Module): The out act value. Defaults to ``torch.nn.Identity()``.
             recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
             recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
 
@@ -1243,7 +1285,7 @@ class RecurrentNetwork(torch.nn.Module):
             prev = h
         self.out = torch.nn.Linear(prev, n_out)
 
-    def reset(self, batch_size, device=None, dtype=None):
+    def reset(self, batch_size, device=None, dtype=None) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -1314,7 +1356,7 @@ class RecurrentNetwork(torch.nn.Module):
         clone: bool = True,
         detach: bool = True,
         strict: bool = True,
-    ):
+    ) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:
@@ -1375,7 +1417,7 @@ class RecurrentNetwork(torch.nn.Module):
         clone: bool = True,
         detach: bool = True,
         strict: bool = True,
-    ):
+    ) -> None:
         """Set the online traces.
 
         Args:
@@ -1416,10 +1458,10 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         hidden_dims=None,
         hidden_dims_actor=None,
         hidden_dims_value=None,
-        activation=torch.tanh,
+        activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -1428,7 +1470,7 @@ class RecurrentActionValueNetwork(torch.nn.Module):
             hidden_dims (Any): The hidden dims value. Defaults to ``None``.
             hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
             hidden_dims_value (Any): The hidden dims value value. Defaults to ``None``.
-            activation (Any): The activation value. Defaults to ``torch.tanh``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.tanh``.
             recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
             recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
 
@@ -1456,7 +1498,7 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         self.actor = RecurrentNetwork(prev, action_dim, hidden_dims=hidden_dims_actor, activation=activation, recurrent_type=recurrent_type, recurrent_kwargs=self.recurrent_kwargs)
         self.value = RecurrentNetwork(prev, 1, hidden_dims=hidden_dims_value, activation=activation, recurrent_type=recurrent_type, recurrent_kwargs=self.recurrent_kwargs)
 
-    def reset(self, batch_size: int = 1):
+    def reset(self, batch_size: int = 1) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -1564,7 +1606,7 @@ class RecurrentActionValueNetwork(torch.nn.Module):
         value = self.value.get_states(clone=clone, detach=detach)
         return {"trunk": trunk, "actor": actor, "value": value}
 
-    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:
@@ -1627,7 +1669,7 @@ class RecurrentActionValueNetwork(torch.nn.Module):
                 trunk.append(None)
         return {"trunk": trunk, "actor": self.actor.get_online_traces(clone=clone, detach=detach), "value": self.value.get_online_traces(clone=clone, detach=detach)}
 
-    def set_online_traces(self, traces: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_online_traces(self, traces: dict, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Set the online traces.
 
         Args:
@@ -1683,10 +1725,10 @@ class RecurrentActionQNetwork(torch.nn.Module):
         hidden_dims=None,
         hidden_dims_actor=None,
         hidden_dims_q=None,
-        activation=torch.relu,
+        activation: Callable[[torch.Tensor], torch.Tensor] = torch.relu,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
-    ):
+    ) -> None:
         """Initialize the instance.
 
         Args:
@@ -1695,7 +1737,7 @@ class RecurrentActionQNetwork(torch.nn.Module):
             hidden_dims (Any): The hidden dims value. Defaults to ``None``.
             hidden_dims_actor (Any): The hidden dims actor value. Defaults to ``None``.
             hidden_dims_q (Any): The hidden dims q value. Defaults to ``None``.
-            activation (Any): The activation value. Defaults to ``torch.relu``.
+            activation (Callable[[torch.Tensor], torch.Tensor]): The activation value. Defaults to ``torch.relu``.
             recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
             recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
 
@@ -1723,7 +1765,7 @@ class RecurrentActionQNetwork(torch.nn.Module):
         self.actor = RecurrentNetwork(prev, action_dim, hidden_dims=hidden_dims_actor, activation=activation, recurrent_type=recurrent_type, recurrent_kwargs=self.recurrent_kwargs)
         self.q     = RecurrentNetwork(prev, action_dim, hidden_dims=hidden_dims_q,     activation=activation, recurrent_type=recurrent_type, recurrent_kwargs=self.recurrent_kwargs)
 
-    def reset(self, batch_size: int = 1):
+    def reset(self, batch_size: int = 1) -> None:
         """Reset internal state for a new episode or stream.
 
         Args:
@@ -1808,7 +1850,7 @@ class RecurrentActionQNetwork(torch.nn.Module):
         trunk = [cell.get_state(clone=clone, detach=detach) for cell in self.layers]
         return {"trunk": trunk, "actor": self.actor.get_states(clone=clone, detach=detach), "q": self.q.get_states(clone=clone, detach=detach)}
 
-    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True):
+    def set_states(self, states: dict, clone: bool = True, detach: bool = True, strict: bool = True) -> None:
         """Restore recurrent states from a snapshot.
 
         Args:
