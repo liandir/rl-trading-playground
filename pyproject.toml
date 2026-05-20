@@ -9,12 +9,17 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "bokeh>=3.9.0",
+    "fastapi>=0.115.0",
     "forex",
     "matplotlib>=3.10.9",
+    "pydantic>=2.7",
     "pydoc-builder",
+    "structlog>=24.1",
     "torch>=2.11.0",
     "torchaudio>=2.11.0",
     "torchvision>=0.26.0",
+    "uvicorn[standard]>=0.30",
+    "watchfiles>=0.22",
     "websockets>=12,<16",
 ]
 
@@ -24,9 +29,12 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.27",
     "ipykernel>=7.2.0",
     "jupyter>=1.1.1",
     "notebook>=7.5.5",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
 ]
 
 [tool.uv.sources]
