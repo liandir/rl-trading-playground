@@ -3,11 +3,12 @@ from collections.abc import Callable
 import torch
 
 from src.network.core.branches import LatentRecurrentFeedForwardBranch
+from src.network.core.ema_encoder import EMAEncoderMixin
 from src.network.core.recurrent import RecurrentNetwork
 from src.network.core.vanilla import VanillaNetwork
 
 
-class FlatPerAssetModelNetwork(torch.nn.Module):
+class FlatPerAssetModelNetwork(EMAEncoderMixin, torch.nn.Module):
     """
     Flat per-asset actor/value/model network with learned asset identity tokens.
 
@@ -44,6 +45,7 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         recurrent_activation: Callable[[torch.Tensor], torch.Tensor] = torch.tanh,
         recurrent_type: str = "simple",
         recurrent_kwargs: dict | None = None,
+        enable_ema_encoder: bool = False,
     ) -> None:
         """Initialize the instance.
 
@@ -71,6 +73,9 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
             recurrent_activation (Callable[[torch.Tensor], torch.Tensor]): The recurrent activation value. Defaults to ``torch.tanh``.
             recurrent_type (str): The recurrent type value. Defaults to ``'simple'``.
             recurrent_kwargs (dict | None): The recurrent kwargs value. Defaults to ``None``.
+            enable_ema_encoder (bool): If True, maintain a frozen EMA shadow of the
+                encoder submodules so ``encode_target`` returns slowly-tracking
+                target latents. Defaults to ``False``.
 
         Returns:
             None: This function does not return a value.
@@ -162,6 +167,20 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
             hidden_dims_model,
         )
 
+        self._init_ema_encoder(enable_ema_encoder)
+
+    def _encoder_modules(self) -> dict[str, torch.nn.Module]:
+        """Return the online encoder submodules tracked by the EMA shadow.
+
+        Returns:
+            dict[str, torch.nn.Module]: Mapping from name to module, matching
+            the keyword names expected by ``_encode_tokens_with``.
+        """
+        return {
+            "asset_extractor": self.asset_extractor,
+            "asset_embedding": self.asset_embedding,
+        }
+
     def _build_head(self, n_in: int, n_out: int, recurrent: bool, hidden_dims: list[int]) -> torch.nn.Module:
         """Build the head.
 
@@ -194,13 +213,31 @@ class FlatPerAssetModelNetwork(torch.nn.Module):
         Returns:
             torch.Tensor: The computed or requested result.
         """
+        return self._encode_tokens_with(x_flat, self.asset_extractor, self.asset_embedding)
+
+    def _encode_tokens_with(
+        self,
+        x_flat: torch.Tensor,
+        asset_extractor: torch.nn.Module,
+        asset_embedding: torch.nn.Module,
+    ) -> torch.Tensor:
+        """Encoder body parameterised by its submodules (online or EMA shadow).
+
+        Args:
+            x_flat (torch.Tensor): Flattened input of shape ``(B, state_dim)``.
+            asset_extractor (torch.nn.Module): Per-asset feature extractor.
+            asset_embedding (torch.nn.Module): Asset identity embedding.
+
+        Returns:
+            torch.Tensor: Per-asset token tensor of shape ``(B, num_assets, token_dim)``.
+        """
         B = x_flat.shape[0]
         globals_feat = x_flat[:, : self.d_global]
         asset_feat = x_flat[:, self.d_global :].view(B, self.num_assets, self.d_asset)
         globals_broadcast = globals_feat.unsqueeze(1).expand(-1, self.num_assets, -1)
         per_asset_in = torch.cat([asset_feat, globals_broadcast], dim=-1)
-        asset_repr = self.asset_extractor(per_asset_in).view(B, self.num_assets, self.d_model)
-        asset_emb = self.asset_embedding(self._asset_ids).unsqueeze(0).expand(B, -1, -1)
+        asset_repr = asset_extractor(per_asset_in).view(B, self.num_assets, self.d_model)
+        asset_emb = asset_embedding(self._asset_ids).unsqueeze(0).expand(B, -1, -1)
         if self.asset_embedding_mode == "add":
             assert asset_repr.shape == asset_emb.shape
             return asset_repr + asset_emb

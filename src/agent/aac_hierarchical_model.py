@@ -332,6 +332,8 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         gae_lambda: float = 0.95,
         imagine_length: int = 0,
         n_imagined_trajectories: int = 0,
+        use_ema_target: bool = False,
+        ema_tau: float = 0.995,
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
     ) -> None:
@@ -351,6 +353,11 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
             gae_lambda (float): The gae lambda value. Defaults to ``0.95``.
             imagine_length (int): The imagine length value. Defaults to ``0``.
             n_imagined_trajectories (int): The n imagined trajectories value. Defaults to ``0``.
+            use_ema_target (bool): If True, compute the latent-prediction target from
+                the network's EMA encoder shadow (requires the network to be built
+                with ``enable_ema_encoder=True``). Defaults to ``False``.
+            ema_tau (float): Polyak decay applied after each optimizer step when
+                ``use_ema_target`` is True. Defaults to ``0.995``.
             dtype (torch.dtype): The dtype value. Defaults to ``torch.float32``.
             device (str): The device value. Defaults to ``'cpu'``.
 
@@ -369,6 +376,8 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         self.gae_lambda           = gae_lambda
         self.imagine_length       = int(imagine_length)
         self.n_imagined_trajectories = int(n_imagined_trajectories)
+        self.use_ema_target       = bool(use_ema_target)
+        self.ema_tau              = float(ema_tau)
         self.dtype                = dtype
         self.device               = torch.device(device)
 
@@ -381,6 +390,11 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         if int(self.net.action_dim) != expected:
             raise ValueError(
                 f"Network action_dim must equal 1 + 3*N + 2*K = {expected}, got {self.net.action_dim}."
+            )
+        if self.use_ema_target and not getattr(self.net, "has_ema_encoder", False):
+            raise ValueError(
+                "use_ema_target=True requires the network to expose an EMA encoder; "
+                "set enable_ema_encoder=True in the network config."
             )
         self.state_dim  = getattr(self.net, "state_dim", None)
         self.action_dim = self.net.action_dim
@@ -768,9 +782,13 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         if h0 is not None:
             self.net.set_states(h0, strict=False)
         all_states = torch.cat([states, last_next_state[None]], dim=0)
-        z_all = self.net.encode(all_states).detach()
-        z_t = z_all[:-1]
-        z_tp1 = z_all[1:]
+        if self.use_ema_target:
+            z_t = self.net.encode(all_states[:-1]).detach()
+            z_tp1 = self.net.encode_target(all_states[1:])
+        else:
+            z_all = self.net.encode(all_states).detach()
+            z_t = z_all[:-1]
+            z_tp1 = z_all[1:]
 
         if h0 is not None:
             self.net.set_states(h0, strict=False)
@@ -836,6 +854,8 @@ class HierarchicalModelAACAgent(_HierarchicalPolicyMixin):
         if max_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_grad_norm)
         self.optim.step()
+        if self.use_ema_target:
+            self.net.ema_update(self.ema_tau)
 
         _append_update_metrics(
             metrics,
