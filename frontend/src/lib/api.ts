@@ -11,10 +11,12 @@ import type {
   RunEvent,
   RunRecord,
   RunSpec,
+  ValidationArtifact,
 } from "./api-types";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? "" : "http://localhost:8000");
+// Both HTTP and WebSocket calls hit this origin directly. CORS on the backend
+// allows http://localhost:3000 by default; override with NEXT_PUBLIC_API_URL.
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export class ApiError extends Error {
   status: number;
@@ -84,16 +86,28 @@ export const api = {
   stopRun: (id: string) => request<RunRecord>(`/runs/${id}/stop`, { method: "POST" }),
   runEvents: (id: string) => request<RunEvent[]>(`/runs/${id}/events`),
   runCheckpoints: (id: string) => request<CheckpointRecord[]>(`/runs/${id}/checkpoints`),
+  runArtifact: (id: string, name = "validation") =>
+    request<ValidationArtifact>(`/runs/${id}/artifact?name=${encodeURIComponent(name)}`),
 
   // checkpoints
   listCheckpoints: (params: { run_id?: string; agent_id?: string } = {}) => {
     const q = new URLSearchParams(params as Record<string, string>).toString();
     return request<CheckpointRecord[]>(`/checkpoints${q ? `?${q}` : ""}`);
   },
+  tagCheckpoint: (id: string, tag: string | null) =>
+    request<CheckpointRecord>(`/checkpoints/${id}/tag`, {
+      method: "POST",
+      body: JSON.stringify({ tag }),
+    }),
+  attachCheckpoint: (id: string, agent_id: string) =>
+    request<CheckpointRecord>(`/checkpoints/${id}/attach`, {
+      method: "POST",
+      body: JSON.stringify({ agent_id }),
+    }),
+  checkpointMeta: (id: string) => request<Record<string, unknown>>(`/checkpoints/${id}/meta`),
 };
 
 export function wsUrl(path: string): string {
   if (typeof window === "undefined") return "";
-  const apiBase = API_BASE || `${window.location.protocol}//${window.location.host}`;
-  return apiBase.replace(/^http/, "ws") + path;
+  return API_BASE.replace(/^http/, "ws") + path;
 }

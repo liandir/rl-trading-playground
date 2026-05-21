@@ -78,6 +78,16 @@ def test_validation_run_writes_artifact(client: TestClient) -> None:
     assert final["status"] == "complete", final
     assert final["summary"].get("steps") == 8
 
+    artifact = client.get(f"/runs/{run_id}/artifact").json()
+    assert "metrics" in artifact and "series" in artifact
+    series = artifact["series"]
+    assert series["portfolio_value"], "series should not be empty"
+    assert len(series["portfolio_value"]) == 8
+    assert "asset_names" in series
+
+    missing = client.get(f"/runs/{run_id}/artifact?name=does-not-exist")
+    assert missing.status_code == 404
+
 
 def test_stop_running_run_marks_status(client: TestClient) -> None:
     spec = _spec(max_steps=2_000)

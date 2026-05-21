@@ -1,6 +1,7 @@
 """Run lifecycle: create (which spawns the subprocess), list, stop, replay events."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -76,3 +77,20 @@ def run_checkpoints(run_id: str) -> list[dict[str, Any]]:
     if get_store().get_run(run_id) is None:
         raise HTTPException(status_code=404, detail="run not found")
     return [cp.model_dump() for cp in get_store().list_checkpoints(run_id=run_id)]
+
+
+@router.get("/{run_id}/artifact")
+def run_artifact(run_id: str, name: str = Query("validation")) -> JSONResponse:
+    """Return a JSON artifact written by the runner under ``artifacts/<name>.json``."""
+
+    store = get_store()
+    if store.get_run(run_id) is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    artifact_path = store.run_dir(run_id) / "artifacts" / f"{name}.json"
+    if not artifact_path.exists():
+        raise HTTPException(status_code=404, detail=f"artifact '{name}' not found for run")
+    try:
+        payload = json.loads(artifact_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"invalid artifact json: {exc}") from exc
+    return JSONResponse(payload)

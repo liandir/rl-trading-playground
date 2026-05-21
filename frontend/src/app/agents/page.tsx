@@ -58,7 +58,11 @@ export default function AgentsPage() {
             <TBody>
               {agents.map((a) => (
                 <TR key={a.id}>
-                  <TD className="font-medium">{a.name}</TD>
+                  <TD>
+                    <Link href={`/agents/${a.id}`} className="font-medium hover:text-primary">
+                      {a.name}
+                    </Link>
+                  </TD>
                   <TD>
                     <Badge variant="primary" className="font-mono">
                       {a.config.agent_type}

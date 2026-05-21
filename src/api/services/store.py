@@ -417,6 +417,16 @@ class Store:
             )
         return rec
 
+    def get_checkpoint(self, checkpoint_id: str) -> CheckpointRecord | None:
+        with self._cursor() as cur:
+            row = cur.execute("SELECT * FROM checkpoints WHERE id = ?", (checkpoint_id,)).fetchone()
+        return self._row_to_checkpoint(row) if row else None
+
+    def set_checkpoint_tag(self, checkpoint_id: str, tag: str | None) -> bool:
+        with self._cursor() as cur:
+            cur.execute("UPDATE checkpoints SET tag = ? WHERE id = ?", (tag, checkpoint_id))
+            return cur.rowcount > 0
+
     def list_checkpoints(
         self, *, run_id: str | None = None, agent_id: str | None = None
     ) -> list[CheckpointRecord]:

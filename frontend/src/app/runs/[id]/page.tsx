@@ -13,6 +13,8 @@ import { PageHeader } from "@/components/shell/PageHeader";
 import { RunStatusBadge } from "@/components/runs/RunStatusBadge";
 import { MetricsCharts } from "@/components/runs/MetricsCharts";
 import { EventLog } from "@/components/runs/EventLog";
+import { ValidationView } from "@/components/runs/ValidationView";
+import { CheckpointList } from "@/components/runs/CheckpointList";
 import { formatDuration, formatNumber, formatPercent } from "@/lib/format";
 
 export default function RunDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -27,6 +29,11 @@ export default function RunDetail({ params }: { params: Promise<{ id: string }> 
     },
   });
   const { events, state } = useEventStream(id);
+  const checkpoints = useQuery({
+    queryKey: ["run-checkpoints", id],
+    queryFn: () => api.listCheckpoints({ run_id: id }),
+    refetchInterval: 5_000,
+  });
   const stop = useMutation({
     mutationFn: () => api.stopRun(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["run", id] }),
@@ -40,7 +47,10 @@ export default function RunDetail({ params }: { params: Promise<{ id: string }> 
     );
   }
 
-  const latestUpdate = events.filter((e) => e.kind === "update").at(-1);
+  const isValidation = run.kind === "validation";
+  const latestUpdate = events
+    .filter((e) => (isValidation ? e.kind === "validation_step" : e.kind === "update"))
+    .at(-1);
   const progress = latestUpdate?.percent ?? 0;
   const isActive = run.status === "running" || run.status === "queued";
 
@@ -136,20 +146,42 @@ export default function RunDetail({ params }: { params: Promise<{ id: string }> 
         </Card>
       </div>
 
-      <Tabs defaultValue="metrics" className="mt-6">
+      <Tabs defaultValue={isValidation ? "results" : "metrics"} className="mt-6">
         <TabsList>
-          <TabsTrigger value="metrics">Metrics</TabsTrigger>
+          {isValidation ? (
+            <TabsTrigger value="results">Results</TabsTrigger>
+          ) : (
+            <TabsTrigger value="metrics">Metrics</TabsTrigger>
+          )}
           <TabsTrigger value="events">Events ({events.length})</TabsTrigger>
+          <TabsTrigger value="checkpoints">
+            Checkpoints {checkpoints.data ? `(${checkpoints.data.length})` : ""}
+          </TabsTrigger>
           <TabsTrigger value="config">Config</TabsTrigger>
         </TabsList>
-        <TabsContent value="metrics">
-          <MetricsCharts events={events} />
-          <p className="mt-2 text-xs text-muted-foreground">
-            WebSocket: <span className="font-mono">{state}</span>
-          </p>
-        </TabsContent>
+        {isValidation ? (
+          <TabsContent value="results">
+            <ValidationView runId={run.id} />
+            <p className="mt-2 text-xs text-muted-foreground">
+              WebSocket: <span className="font-mono">{state}</span>
+            </p>
+          </TabsContent>
+        ) : (
+          <TabsContent value="metrics">
+            <MetricsCharts events={events} />
+            <p className="mt-2 text-xs text-muted-foreground">
+              WebSocket: <span className="font-mono">{state}</span>
+            </p>
+          </TabsContent>
+        )}
         <TabsContent value="events">
           <EventLog events={events} />
+        </TabsContent>
+        <TabsContent value="checkpoints">
+          <CheckpointList
+            checkpoints={checkpoints.data ?? []}
+            emptyHint="Checkpoints appear here once an episode finishes and save_checkpoint is on."
+          />
         </TabsContent>
         <TabsContent value="config">
           <pre className="surface overflow-auto p-4 text-xs font-mono leading-relaxed">

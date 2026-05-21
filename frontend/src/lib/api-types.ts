@@ -217,3 +217,31 @@ export interface DataPreview {
   first_time: number | null;
   last_time: number | null;
 }
+
+export interface ValidationSeries {
+  timestamps: string[];
+  asset_names: string[];
+  portfolio_value: number[];
+  cash: number[];
+  prices: number[][];
+  normalized_prices: number[][];
+  normalized_value: number[];
+  rewards: number[];
+  cumulative_reward: number[];
+  drawdown: number[];
+  portfolio_fraction: number[][];
+  cash_fraction: number[];
+  committed: number[];
+  cumulative_longs: number[];
+  cumulative_shorts: number[];
+  cumulative_closes: number[];
+  cumulative_invalid: number[];
+  cumulative_realized_pnl: number[];
+  cumulative_realized_cost: number[];
+  actions: unknown[];
+}
+
+export interface ValidationArtifact {
+  metrics: Record<string, number | string | boolean>;
+  series: ValidationSeries;
+}
