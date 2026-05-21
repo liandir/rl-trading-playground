@@ -1,15 +1,16 @@
-"""Tail run events from disk and fan them out to WebSocket subscribers.
+"""Tail JSONL events from disk and fan them out to WebSocket subscribers.
 
-Each run has at most one tail task. Tail tasks are started on demand the
-first time a subscriber attaches and stay alive until the run reaches a
-terminal status *and* no new lines have been observed for one extra poll.
+Handles both runs and deployments: each subscription is keyed by an opaque
+entity id and the directory that holds its ``events.jsonl``. One tail task
+per (kind, id) pair, kept alive until the entity reaches a terminal status
+and no new lines have been observed for one extra poll.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
 from src.api.services.store import Store, get_store
 from src.api.settings import Settings, get_settings
@@ -17,9 +18,11 @@ from src.api.settings import Settings, get_settings
 
 _TERMINAL = {"complete", "stopped", "failed"}
 
+EntityKind = Literal["run", "deployment"]
+
 
 class EventBroker:
-    """Coordinates one tail task per run plus a set of subscriber queues."""
+    """Coordinates per-entity tail tasks and subscriber queues."""
 
     def __init__(
         self,
@@ -31,29 +34,41 @@ class EventBroker:
         self.settings = settings or get_settings()
         self.store = store or get_store()
         self.poll_interval = poll_interval
-        self._tail_tasks: dict[str, asyncio.Task[None]] = {}
-        self._subscribers: dict[str, set[asyncio.Queue[dict[str, Any] | None]]] = {}
+        self._tail_tasks: dict[tuple[EntityKind, str], asyncio.Task[None]] = {}
+        self._subscribers: dict[
+            tuple[EntityKind, str], set[asyncio.Queue[dict[str, Any] | None]]
+        ] = {}
         self._lock = asyncio.Lock()
 
-    async def subscribe(self, run_id: str) -> asyncio.Queue[dict[str, Any] | None]:
+    async def subscribe(
+        self, entity_id: str, *, kind: EntityKind = "run"
+    ) -> asyncio.Queue[dict[str, Any] | None]:
         """Attach a subscriber queue and ensure a tail task is running."""
 
+        key: tuple[EntityKind, str] = (kind, entity_id)
         queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=512)
         async with self._lock:
-            self._subscribers.setdefault(run_id, set()).add(queue)
-            if run_id not in self._tail_tasks or self._tail_tasks[run_id].done():
-                self._tail_tasks[run_id] = asyncio.create_task(
-                    self._tail_loop(run_id), name=f"event-tail-{run_id}"
+            self._subscribers.setdefault(key, set()).add(queue)
+            if key not in self._tail_tasks or self._tail_tasks[key].done():
+                self._tail_tasks[key] = asyncio.create_task(
+                    self._tail_loop(key), name=f"event-tail-{kind}-{entity_id}"
                 )
         return queue
 
-    async def unsubscribe(self, run_id: str, queue: asyncio.Queue[dict[str, Any] | None]) -> None:
+    async def unsubscribe(
+        self,
+        entity_id: str,
+        queue: asyncio.Queue[dict[str, Any] | None],
+        *,
+        kind: EntityKind = "run",
+    ) -> None:
+        key = (kind, entity_id)
         async with self._lock:
-            subs = self._subscribers.get(run_id)
+            subs = self._subscribers.get(key)
             if subs is not None:
                 subs.discard(queue)
                 if not subs:
-                    self._subscribers.pop(run_id, None)
+                    self._subscribers.pop(key, None)
 
     async def shutdown(self) -> None:
         async with self._lock:
@@ -68,11 +83,9 @@ class EventBroker:
             except (asyncio.CancelledError, Exception):
                 pass
 
-    async def _tail_loop(self, run_id: str) -> None:
-        """Read appended JSONL lines and push each parsed event to subscribers."""
-
-        path = self.settings.runs_dir / run_id / "events.jsonl"
-        # Wait for the file to appear, but give up after a few seconds.
+    async def _tail_loop(self, key: tuple[EntityKind, str]) -> None:
+        kind, entity_id = key
+        path = _events_path(self.settings, entity_id, kind=kind)
         for _ in range(50):
             if path.exists():
                 break
@@ -86,10 +99,8 @@ class EventBroker:
                         event = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    await self._broadcast(run_id, event)
-                # If the run reached a terminal status and no new lines arrived,
-                # do one more read after a short wait and then exit.
-                status = self._run_status(run_id)
+                    await self._broadcast(key, event)
+                status = self._status(kind, entity_id)
                 if status in _TERMINAL and not lines:
                     await asyncio.sleep(self.poll_interval)
                     offset, trailing = await asyncio.to_thread(_read_new_lines, path, offset)
@@ -98,36 +109,43 @@ class EventBroker:
                             event = json.loads(line)
                         except json.JSONDecodeError:
                             continue
-                        await self._broadcast(run_id, event)
-                    await self._broadcast(run_id, None)
+                        await self._broadcast(key, event)
+                    await self._broadcast(key, None)
                     return
                 await asyncio.sleep(self.poll_interval)
         except asyncio.CancelledError:
-            await self._broadcast(run_id, None)
+            await self._broadcast(key, None)
             raise
 
-    async def _broadcast(self, run_id: str, event: dict[str, Any] | None) -> None:
+    async def _broadcast(
+        self, key: tuple[EntityKind, str], event: dict[str, Any] | None
+    ) -> None:
         async with self._lock:
-            subscribers = list(self._subscribers.get(run_id, ()))
+            subscribers = list(self._subscribers.get(key, ()))
         for queue in subscribers:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                # Drop the oldest item and retry.
                 try:
                     queue.get_nowait()
                     queue.put_nowait(event)
                 except (asyncio.QueueEmpty, asyncio.QueueFull):
                     continue
 
-    def _run_status(self, run_id: str) -> str | None:
-        rec = self.store.get_run(run_id)
+    def _status(self, kind: EntityKind, entity_id: str) -> str | None:
+        if kind == "run":
+            rec = self.store.get_run(entity_id)
+        else:
+            rec = self.store.get_deployment(entity_id)
         return rec.status if rec is not None else None
 
 
-def _read_new_lines(path: Path, offset: int) -> tuple[int, list[str]]:
-    """Read all complete lines after ``offset``; returns ``(new_offset, lines)``."""
+def _events_path(settings: Settings, entity_id: str, *, kind: EntityKind) -> Path:
+    base = settings.runs_dir if kind == "run" else settings.deployments_dir
+    return base / entity_id / "events.jsonl"
 
+
+def _read_new_lines(path: Path, offset: int) -> tuple[int, list[str]]:
     if not path.exists():
         return offset, []
     with path.open("rb") as fh:
@@ -144,10 +162,20 @@ def _read_new_lines(path: Path, offset: int) -> tuple[int, list[str]]:
     return offset + len(consumed), lines
 
 
-async def replay_history(run_id: str, settings: Settings) -> AsyncIterator[dict[str, Any]]:
-    """Yield every event currently on disk for ``run_id``."""
+async def replay_history(
+    entity_id: str,
+    settings: Settings,
+    *,
+    base_dir: Path | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield every event currently on disk for ``entity_id``.
 
-    path = settings.runs_dir / run_id / "events.jsonl"
+    By default reads from ``runs/<id>/events.jsonl``; pass ``base_dir`` to
+    target deployments or any other on-disk JSONL stream.
+    """
+
+    base = base_dir or settings.runs_dir
+    path = base / entity_id / "events.jsonl"
     if not path.exists():
         return
     text = await asyncio.to_thread(path.read_text)

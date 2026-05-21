@@ -24,6 +24,7 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
         agents_dir=tmp_path / "store" / "agents",
         envs_dir=tmp_path / "store" / "envs",
         data_sources_dir=tmp_path / "store" / "data_sources",
+        deployments_dir=tmp_path / "store" / "deployments",
         cors_origins=("http://localhost:3000",),
     )
     monkeypatch.setattr(settings_module, "_settings", cfg)

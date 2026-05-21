@@ -1,9 +1,8 @@
 """Subprocess lifecycle: spawn, track, signal, harvest exit codes.
 
-A single :class:`RunnerService` instance is shared across the FastAPI app.
-It owns the table of live runner subprocesses keyed by ``run_id`` and a
-single background task that reaps exited processes so their exit codes are
-recorded on the run row.
+Handles both training/validation runs and live paper-trading deployments.
+A single reaper task wakes up periodically to reconcile exit codes with
+the matching row in the store.
 """
 from __future__ import annotations
 
@@ -12,10 +11,22 @@ import os
 import signal
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from src.api.services.store import Store, get_store
 from src.api.settings import Settings, get_settings
+
+
+ProcKind = Literal["run", "deployment"]
+
+
+@dataclass
+class _Proc:
+    kind: ProcKind
+    proc: "subprocess.Popen[bytes]"
+    stdout: object
 
 
 class RunnerService:
@@ -24,8 +35,7 @@ class RunnerService:
     def __init__(self, settings: Settings | None = None, store: Store | None = None) -> None:
         self.settings = settings or get_settings()
         self.store = store or get_store()
-        self._procs: dict[str, subprocess.Popen[bytes]] = {}
-        self._stdout_files: dict[str, object] = {}
+        self._procs: dict[str, _Proc] = {}
         self._lock = asyncio.Lock()
         self._reaper_task: asyncio.Task[None] | None = None
 
@@ -41,52 +51,71 @@ class RunnerService:
             except asyncio.CancelledError:
                 pass
             self._reaper_task = None
-        for run_id in list(self._procs):
-            await self.signal_stop(run_id)
-        for fh in self._stdout_files.values():
+        for proc_id in list(self._procs):
+            await self.signal_stop(proc_id)
+        for entry in self._procs.values():
             try:
-                fh.close()  # type: ignore[union-attr]
+                entry.stdout.close()  # type: ignore[union-attr]
             except Exception:
                 pass
         self._procs.clear()
-        self._stdout_files.clear()
 
     async def launch(self, run_id: str) -> int:
-        """Spawn the runner subprocess for ``run_id`` and record its PID."""
+        """Spawn the training/validation runner subprocess for ``run_id``."""
 
-        run_dir = self.settings.runs_dir / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        stdout_path = run_dir / "stdout.log"
+        pid = await self._spawn(
+            kind="run",
+            entity_id=run_id,
+            module="src.api.runner",
+            log_dir=self.settings.runs_dir / run_id,
+        )
+        self.store.update_run_status(run_id, "running", pid=pid)
+        return pid
 
+    async def launch_deployment(self, deployment_id: str) -> int:
+        """Spawn the live deployment subprocess for ``deployment_id``."""
+
+        pid = await self._spawn(
+            kind="deployment",
+            entity_id=deployment_id,
+            module="src.api.live",
+            log_dir=self.settings.deployments_dir / deployment_id,
+        )
+        self.store.update_deployment_status(deployment_id, "running", pid=pid)
+        return pid
+
+    async def signal_stop(self, entity_id: str) -> bool:
+        """Send SIGTERM to a tracked subprocess. Returns False if unknown."""
+
+        async with self._lock:
+            entry = self._procs.get(entity_id)
+        if entry is None or entry.proc.poll() is not None:
+            return False
+        try:
+            entry.proc.send_signal(signal.SIGTERM)
+        except ProcessLookupError:
+            return False
+        return True
+
+    async def _spawn(
+        self, *, kind: ProcKind, entity_id: str, module: str, log_dir: Path
+    ) -> int:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = log_dir / "stdout.log"
         env = os.environ.copy()
         env["STUDIO_STORE"] = str(self.settings.store_root)
         repo_root = Path(__file__).resolve().parents[3]
         fh = stdout_path.open("ab", buffering=0)
         proc = subprocess.Popen(
-            [sys.executable, "-m", "src.api.runner", run_id],
+            [sys.executable, "-m", module, entity_id],
             cwd=repo_root,
             env=env,
             stdout=fh,
             stderr=subprocess.STDOUT,
         )
         async with self._lock:
-            self._procs[run_id] = proc
-            self._stdout_files[run_id] = fh
-        self.store.update_run_status(run_id, "running", pid=proc.pid)
+            self._procs[entity_id] = _Proc(kind=kind, proc=proc, stdout=fh)
         return proc.pid
-
-    async def signal_stop(self, run_id: str) -> bool:
-        """Send SIGTERM to a tracked subprocess. Returns False if unknown."""
-
-        async with self._lock:
-            proc = self._procs.get(run_id)
-        if proc is None or proc.poll() is not None:
-            return False
-        try:
-            proc.send_signal(signal.SIGTERM)
-        except ProcessLookupError:
-            return False
-        return True
 
     async def _reaper_loop(self) -> None:
         """Poll tracked subprocesses, persist exit codes and clean up handles."""
@@ -94,40 +123,49 @@ class RunnerService:
         try:
             while True:
                 await asyncio.sleep(0.25)
-                done: list[tuple[str, int]] = []
+                done: list[tuple[str, ProcKind, int]] = []
                 async with self._lock:
-                    for run_id, proc in list(self._procs.items()):
-                        rc = proc.poll()
+                    for entity_id, entry in list(self._procs.items()):
+                        rc = entry.proc.poll()
                         if rc is not None:
-                            done.append((run_id, rc))
-                            self._procs.pop(run_id, None)
-                            fh = self._stdout_files.pop(run_id, None)
-                            if fh is not None:
-                                try:
-                                    fh.close()  # type: ignore[union-attr]
-                                except Exception:
-                                    pass
-                for run_id, rc in done:
-                    self._on_exit(run_id, rc)
+                            done.append((entity_id, entry.kind, rc))
+                            self._procs.pop(entity_id, None)
+                            try:
+                                entry.stdout.close()  # type: ignore[union-attr]
+                            except Exception:
+                                pass
+                for entity_id, kind, rc in done:
+                    self._on_exit(entity_id, kind, rc)
         except asyncio.CancelledError:
             raise
 
-    def _on_exit(self, run_id: str, rc: int) -> None:
-        """Reconcile run status with the actual subprocess exit code."""
-
-        rec = self.store.get_run(run_id)
-        if rec is None:
-            return
-        if rec.status in ("complete", "stopped", "failed"):
-            self.store.update_run_status(run_id, rec.status, exit_code=rc)
-            return
-        # Killed by SIGTERM / SIGINT before the runner could mark itself stopped.
-        if rc in (-signal.SIGTERM, -signal.SIGINT):
-            self.store.update_run_status(run_id, "stopped", exit_code=rc)
-            return
-        status = "failed" if rc != 0 else "complete"
-        notes = f"exit code {rc}" if rc != 0 else None
-        self.store.update_run_status(run_id, status, exit_code=rc, notes=notes)
+    def _on_exit(self, entity_id: str, kind: ProcKind, rc: int) -> None:
+        if kind == "run":
+            rec = self.store.get_run(entity_id)
+            if rec is None:
+                return
+            if rec.status in ("complete", "stopped", "failed"):
+                self.store.update_run_status(entity_id, rec.status, exit_code=rc)
+                return
+            if rc in (-signal.SIGTERM, -signal.SIGINT):
+                self.store.update_run_status(entity_id, "stopped", exit_code=rc)
+                return
+            status = "failed" if rc != 0 else "complete"
+            notes = f"exit code {rc}" if rc != 0 else None
+            self.store.update_run_status(entity_id, status, exit_code=rc, notes=notes)
+        else:  # deployment
+            rec = self.store.get_deployment(entity_id)
+            if rec is None:
+                return
+            if rec.status in ("complete", "stopped", "failed"):
+                self.store.update_deployment_status(entity_id, rec.status, exit_code=rc)
+                return
+            if rc in (-signal.SIGTERM, -signal.SIGINT):
+                self.store.update_deployment_status(entity_id, "stopped", exit_code=rc)
+                return
+            status = "failed" if rc != 0 else "complete"
+            notes = f"exit code {rc}" if rc != 0 else None
+            self.store.update_deployment_status(entity_id, status, exit_code=rc, notes=notes)
 
 
 _runner: RunnerService | None = None

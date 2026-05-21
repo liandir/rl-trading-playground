@@ -19,6 +19,7 @@ class Settings:
     agents_dir: Path
     envs_dir: Path
     data_sources_dir: Path
+    deployments_dir: Path
     cors_origins: tuple[str, ...]
 
     @classmethod
@@ -33,11 +34,19 @@ class Settings:
             agents_dir=store_root / "agents",
             envs_dir=store_root / "envs",
             data_sources_dir=store_root / "data_sources",
+            deployments_dir=store_root / "deployments",
             cors_origins=origins,
         )
 
     def ensure_dirs(self) -> None:
-        for path in (self.store_root, self.runs_dir, self.agents_dir, self.envs_dir, self.data_sources_dir):
+        for path in (
+            self.store_root,
+            self.runs_dir,
+            self.agents_dir,
+            self.envs_dir,
+            self.data_sources_dir,
+            self.deployments_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
 

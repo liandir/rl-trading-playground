@@ -1,4 +1,4 @@
-"""WebSocket fan-out for live run events."""
+"""WebSocket fan-out for live run and deployment events."""
 from __future__ import annotations
 
 import asyncio
@@ -15,24 +15,32 @@ router = APIRouter(tags=["ws"])
 
 @router.websocket("/ws/runs/{run_id}")
 async def run_events(ws: WebSocket, run_id: str) -> None:
-    """Stream every event for ``run_id`` as JSON messages over the WebSocket.
+    """Stream events for a training/validation ``run_id``."""
 
-    The first batch replays everything currently on disk, then the broker
-    forwards new lines as the runner subprocess appends them. A ``null``
-    payload (sent once) signals "no more events; close the socket".
-    """
-
-    store = get_store()
-    if store.get_run(run_id) is None:
+    if get_store().get_run(run_id) is None:
         await ws.close(code=4404)
         return
+    await _stream(ws, run_id, kind="run")
 
+
+@router.websocket("/ws/deployments/{deployment_id}")
+async def deployment_events(ws: WebSocket, deployment_id: str) -> None:
+    """Stream events for a live ``deployment_id``."""
+
+    if get_store().get_deployment(deployment_id) is None:
+        await ws.close(code=4404)
+        return
+    await _stream(ws, deployment_id, kind="deployment")
+
+
+async def _stream(ws: WebSocket, entity_id: str, *, kind: str) -> None:
     await ws.accept()
     settings = get_settings()
+    base_dir = settings.runs_dir if kind == "run" else settings.deployments_dir
     broker = get_broker()
-    queue = await broker.subscribe(run_id)
+    queue = await broker.subscribe(entity_id, kind=kind)  # type: ignore[arg-type]
     try:
-        async for event in replay_history(run_id, settings):
+        async for event in replay_history(entity_id, settings, base_dir=base_dir):
             await ws.send_json(event)
         while True:
             event = await queue.get()
@@ -44,7 +52,7 @@ async def run_events(ws: WebSocket, run_id: str) -> None:
     except asyncio.CancelledError:
         raise
     finally:
-        await broker.unsubscribe(run_id, queue)
+        await broker.unsubscribe(entity_id, queue, kind=kind)  # type: ignore[arg-type]
         try:
             await ws.close()
         except Exception:

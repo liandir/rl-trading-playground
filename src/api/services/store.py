@@ -19,6 +19,7 @@ from uuid import uuid4
 from src.api.schemas.agent import AgentConfig, AgentRecord
 from src.api.schemas.checkpoint import CheckpointRecord
 from src.api.schemas.data import DataConfig, DataSourceRecord
+from src.api.schemas.deployment import DeploymentRecord, DeploymentSpec, DeploymentStatus
 from src.api.schemas.env import EnvironmentConfig, EnvironmentRecord
 from src.api.schemas.run import RunRecord, RunSpec, RunStatus
 from src.api.settings import Settings, get_settings
@@ -85,6 +86,22 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 
 CREATE INDEX IF NOT EXISTS checkpoints_run_idx ON checkpoints(run_id);
 CREATE INDEX IF NOT EXISTS checkpoints_agent_idx ON checkpoints(agent_id);
+
+CREATE TABLE IF NOT EXISTS deployments (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    name TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    agent_id TEXT NOT NULL,
+    pid INTEGER,
+    exit_code INTEGER,
+    notes TEXT NOT NULL DEFAULT '',
+    spec_json TEXT,
+    summary_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS deployments_status_idx ON deployments(status);
 """
 
 
@@ -457,6 +474,103 @@ class Store:
             tag=row["tag"],
             path=row["path"],
             created_at=_parse_iso(row["created_at"]) or _now(),
+        )
+
+    # ----- deployments -------------------------------------------------------
+
+    def create_deployment(self, spec: DeploymentSpec, name: str | None = None) -> DeploymentRecord:
+        dep_id = new_id()
+        dep_name = name or f"deployment {dep_id[:6]}"
+        rec = DeploymentRecord(
+            id=dep_id,
+            status="queued",
+            name=dep_name,
+            started_at=_now(),
+            agent_id=spec.agent_id,
+            spec=spec,
+        )
+        dep_dir = self.settings.deployments_dir / dep_id
+        dep_dir.mkdir(parents=True, exist_ok=True)
+        (dep_dir / "config.json").write_text(spec.model_dump_json(indent=2))
+        (dep_dir / "events.jsonl").touch()
+        with self._cursor() as cur:
+            cur.execute(
+                "INSERT INTO deployments (id, status, name, started_at, agent_id, spec_json)"
+                " VALUES (?,?,?,?,?,?)",
+                (
+                    rec.id,
+                    rec.status,
+                    rec.name,
+                    _iso(rec.started_at),
+                    rec.agent_id,
+                    spec.model_dump_json(),
+                ),
+            )
+        return rec
+
+    def update_deployment_status(
+        self,
+        deployment_id: str,
+        status: DeploymentStatus,
+        *,
+        pid: int | None = None,
+        exit_code: int | None = None,
+        notes: str | None = None,
+        summary: dict[str, Any] | None = None,
+    ) -> None:
+        with self._cursor() as cur:
+            current = cur.execute(
+                "SELECT * FROM deployments WHERE id = ?", (deployment_id,)
+            ).fetchone()
+            if current is None:
+                return
+            ended_at = current["ended_at"]
+            if status in ("complete", "stopped", "failed") and ended_at is None:
+                ended_at = _iso(_now())
+            summary_json = json.dumps(summary) if summary is not None else current["summary_json"]
+            cur.execute(
+                "UPDATE deployments SET status = ?, pid = COALESCE(?, pid),"
+                " exit_code = COALESCE(?, exit_code), ended_at = ?,"
+                " notes = COALESCE(?, notes), summary_json = ? WHERE id = ?",
+                (status, pid, exit_code, ended_at, notes, summary_json, deployment_id),
+            )
+
+    def list_deployments(self, *, status: str | None = None) -> list[DeploymentRecord]:
+        query = "SELECT * FROM deployments"
+        params: list[Any] = []
+        if status is not None:
+            query += " WHERE status = ?"
+            params.append(status)
+        query += " ORDER BY started_at DESC"
+        with self._cursor() as cur:
+            rows = cur.execute(query, params).fetchall()
+        return [self._row_to_deployment(row) for row in rows]
+
+    def get_deployment(self, deployment_id: str) -> DeploymentRecord | None:
+        with self._cursor() as cur:
+            row = cur.execute(
+                "SELECT * FROM deployments WHERE id = ?", (deployment_id,)
+            ).fetchone()
+        return self._row_to_deployment(row) if row else None
+
+    def deployment_dir(self, deployment_id: str) -> Path:
+        return self.settings.deployments_dir / deployment_id
+
+    def _row_to_deployment(self, row: sqlite3.Row) -> DeploymentRecord:
+        spec = DeploymentSpec.model_validate_json(row["spec_json"]) if row["spec_json"] else None
+        summary = json.loads(row["summary_json"] or "{}")
+        return DeploymentRecord(
+            id=row["id"],
+            status=row["status"],
+            name=row["name"],
+            started_at=_parse_iso(row["started_at"]) or _now(),
+            ended_at=_parse_iso(row["ended_at"]),
+            agent_id=row["agent_id"],
+            pid=row["pid"],
+            exit_code=row["exit_code"],
+            notes=row["notes"] or "",
+            spec=spec,
+            summary=summary,
         )
 
     # ----- lifecycle ---------------------------------------------------------

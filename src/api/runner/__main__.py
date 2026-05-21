@@ -168,6 +168,8 @@ def _write_checkpoint_meta(
 ) -> None:
     meta = CheckpointMeta(
         agent_config=spec.agent,
+        data_config=spec.data,
+        env_config=spec.env,
         step=step,
         metric_name=metric_name,
         metric_value=metric_value,

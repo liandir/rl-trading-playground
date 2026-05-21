@@ -7,17 +7,22 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from src.api.schemas.agent import AgentConfig
+from src.api.schemas.data import DataConfig
+from src.api.schemas.env import EnvironmentConfig
 
 
 class CheckpointMeta(BaseModel):
     """Sidecar JSON written alongside every `.ptm` file.
 
     The agent class only persists network weights, so the runner stores the
-    matching agent/network config and a snapshot of the metric that triggered
-    the save next to the weights file.
+    matching agent/network config and snapshots of the data and environment
+    used during training. The data config carries the bar interval, which
+    validation and live deployments must match.
     """
 
     agent_config: AgentConfig
+    data_config: DataConfig | None = None
+    env_config: EnvironmentConfig | None = None
     step: int
     episode: int = 0
     metric_name: str | None = None
