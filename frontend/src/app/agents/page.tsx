@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2 } from "lucide-react";
+import { FileUp, Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -26,9 +26,17 @@ export default function AgentsPage() {
         title="Agents"
         description="Saved agent presets and their last checkpoint."
         actions={
-          <Link href="/agents/new" className={buttonVariants() + " inline-flex items-center gap-2"}>
-            <Plus className="h-4 w-4" /> New agent
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/agents/import"
+              className={buttonVariants({ variant: "secondary" }) + " inline-flex items-center gap-2"}
+            >
+              <FileUp className="h-4 w-4" /> Import
+            </Link>
+            <Link href="/agents/new" className={buttonVariants() + " inline-flex items-center gap-2"}>
+              <Plus className="h-4 w-4" /> New agent
+            </Link>
+          </div>
         }
       />
 

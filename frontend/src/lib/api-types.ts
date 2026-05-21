@@ -245,3 +245,29 @@ export interface ValidationArtifact {
   metrics: Record<string, number | string | boolean>;
   series: ValidationSeries;
 }
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number | null;
+  modified: string | null;
+}
+
+export interface BrowseResponse {
+  root: string;
+  path: string;
+  parent: string | null;
+  entries: FileEntry[];
+}
+
+export interface InspectResponse {
+  has_sidecar: boolean;
+  source_path: string;
+  sidecar_path: string | null;
+  suggested: AgentConfig | null;
+  parent_run_id: string | null;
+  saved_at: string | null;
+  network_keys: string[];
+  note: string;
+}

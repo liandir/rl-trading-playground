@@ -1,12 +1,14 @@
 import type {
   AgentConfig,
   AgentRecord,
+  BrowseResponse,
   CheckpointRecord,
   DataConfig,
   DataPreview,
   DataSourceRecord,
   EnvironmentConfig,
   EnvironmentRecord,
+  InspectResponse,
   RegistryResponse,
   RunEvent,
   RunRecord,
@@ -63,6 +65,22 @@ export const api = {
   createAgent: (name: string, config: AgentConfig) =>
     request<AgentRecord>("/agents", { method: "POST", body: JSON.stringify({ name, config }) }),
   deleteAgent: (id: string) => request<void>(`/agents/${id}`, { method: "DELETE" }),
+  inspectCheckpoint: (path: string) =>
+    request<InspectResponse>("/agents/inspect", { method: "POST", body: JSON.stringify({ path }) }),
+  importAgent: (name: string, source_path: string, config: AgentConfig) =>
+    request<AgentRecord>("/agents/import", {
+      method: "POST",
+      body: JSON.stringify({ name, source_path, config }),
+    }),
+
+  // files
+  browse: (path?: string, ext?: string) => {
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    if (ext) params.set("ext", ext);
+    const q = params.toString();
+    return request<BrowseResponse>(`/files/browse${q ? `?${q}` : ""}`);
+  },
 
   // envs
   listEnvs: () => request<EnvironmentRecord[]>("/envs"),

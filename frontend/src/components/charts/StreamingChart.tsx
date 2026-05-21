@@ -68,6 +68,14 @@ export function StreamingChart({
       height,
       legend: { show: true, live: true },
       scales: { x: { time: false } },
+      cursor: {
+        // Drag-to-zoom on both axes; double-click resets.
+        drag: { x: true, y: true, setScale: true, uni: 10 },
+        // Crosshair stays visible so the user knows where they are.
+        x: true,
+        y: true,
+        points: { show: true, size: 6 },
+      },
       axes: [
         {
           stroke: "rgba(120,120,140,0.7)",

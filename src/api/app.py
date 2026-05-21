@@ -7,7 +7,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import agents, checkpoints, data, envs, meta, runs, ws
+from src.api.routes import agents, checkpoints, data, envs, files, meta, runs, ws
 from src.api.services.events import get_broker
 from src.api.services.runner import get_runner
 from src.api.services.store import get_store
@@ -53,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(data.router)
     app.include_router(runs.router)
     app.include_router(checkpoints.router)
+    app.include_router(files.router)
     app.include_router(ws.router)
     return app
 
