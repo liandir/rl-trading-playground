@@ -18,21 +18,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      DOCS_DEPENDENCY_SSH_KEY: ${{ secrets.DOCS_DEPENDENCY_SSH_KEY }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
-      - name: Configure SSH for private Git dependencies
-        if: env.DOCS_DEPENDENCY_SSH_KEY != ''
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "$DOCS_DEPENDENCY_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5

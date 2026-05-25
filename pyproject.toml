@@ -38,7 +38,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-pydoc-builder = { git = "ssh://git@github.com/liandir/pydoc-builder.git", rev = "main" }
+pydoc-builder = { git = "https://github.com/liandir/pydoc-builder.git", rev = "main" }
 
 [project.urls]
 Repository = "https://github.com/liandir/rl-trading-playground"

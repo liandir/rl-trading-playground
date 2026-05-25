@@ -2194,7 +2194,7 @@ wheels = [
 [[package]]
 name = "pydoc-builder"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/liandir/pydoc-builder.git?rev=main#76b5c82951dd1003360f7eb4b243593f93a32ccf" }
+source = { git = "https://github.com/liandir/pydoc-builder.git?rev=main#76b5c82951dd1003360f7eb4b243593f93a32ccf" }
 
 [[package]]
 name = "pygments"
@@ -2504,7 +2504,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "matplotlib", specifier = ">=3.10.9" },
     { name = "pydantic", specifier = ">=2.7" },
-    { name = "pydoc-builder", git = "ssh://git@github.com/liandir/pydoc-builder.git?rev=main" },
+    { name = "pydoc-builder", git = "https://github.com/liandir/pydoc-builder.git?rev=main" },
     { name = "structlog", specifier = ">=24.1" },
     { name = "torch", specifier = ">=2.11.0" },
     { name = "torchaudio", specifier = ">=2.11.0" },
