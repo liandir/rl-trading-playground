@@ -90,7 +90,8 @@ expected variables.
 
 ## Documentation
 
-Build the static documentation site with:
+Build the static documentation site with
+[liandir/pydoc-builder](https://github.com/liandir/pydoc-builder):
 
 ```bash
 uv run pydoc-builder --package src
