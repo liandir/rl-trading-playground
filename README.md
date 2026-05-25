@@ -90,6 +90,9 @@ expected variables.
 
 ## Documentation
 
+The documentation is published at
+https://liandir.github.io/rl-trading-playground/.
+
 Build the static documentation site with
 [liandir/pydoc-builder](https://github.com/liandir/pydoc-builder):
 
