@@ -1,4 +1,6 @@
 data/
+!src/data/
+!src/data/**/*.py
 config/
 
 # Frontend (Next.js)

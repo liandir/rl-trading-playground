@@ -11,12 +11,14 @@ from historical data to live execution.
 ```
 src/
 ├── agent/        RL algorithms (AAC, AAQ, PPO and hierarchical / auxiliary / spatiotemporal variants)
+├── api/          FastAPI backend for the trading studio
+├── data/         Dataset loading and preprocessing helpers
 ├── environment/  Trading environments (discrete, generic, hybrid, live)
 ├── network/      Neural network building blocks and full architectures
 ├── kraken/       Kraken REST and WebSocket connectors for live data and order flow
 ├── news/         News collection, deduplication, and tagging pipeline
-├── evaluate/     Visualisation and evaluation helpers
-└── data.py       Dataset loading and preprocessing
+└── evaluate/     Visualisation and evaluation helpers
+frontend/         Next.js frontend for the trading studio
 configs/          Experiment configuration files
 notebooks/        Training and analysis notebooks
 scripts/          Utility scripts (live feeds, notebook tooling)
@@ -68,6 +70,49 @@ Python 3.11+.
 ```bash
 uv sync
 ```
+
+The studio frontend is a separate Next.js app. The launcher installs its Node
+dependencies automatically on first run if the local `next` executable is
+missing. To pre-install them manually, run:
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+## Running the Studio
+
+The installed console command starts both the FastAPI backend and the Next.js
+frontend in development mode:
+
+```bash
+uv run autotrading-playground
+```
+
+By default, the backend runs at http://127.0.0.1:8000 and the frontend runs at
+http://127.0.0.1:3000. The launcher automatically sets:
+
+- `NEXT_PUBLIC_API_URL` for the frontend.
+- `STUDIO_CORS` for the backend.
+
+Useful options:
+
+```bash
+uv run autotrading-playground \
+  --backend-host 127.0.0.1 \
+  --backend-port 8000 \
+  --frontend-host 127.0.0.1 \
+  --frontend-port 3000
+```
+
+If your frontend lives somewhere other than `frontend/`, pass its path:
+
+```bash
+uv run autotrading-playground --frontend-dir /path/to/frontend
+```
+
+Press `Ctrl+C` to stop both processes.
 
 ## Training and Evaluation
 

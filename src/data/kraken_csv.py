@@ -1,7 +1,13 @@
-"""Data utilities for multi-currency trading."""
+"""Kraken OHLCVT CSV data utilities for multi-currency trading.
+
+This module contains the legacy CSV extraction helpers for Kraken-formatted
+historical market files. Files are expected to be named with the pattern
+``{symbol}_{interval}.csv`` and contain Unix timestamp, OHLC, volume, and trade
+count columns.
+"""
 import os
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Tuple
+from typing import Any, Dict, List, Mapping, Tuple
 
 
 PAIRS = {
@@ -22,14 +28,21 @@ PAIRS = {
 DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
 
-def read_historical_data(path):
-    """Read historical data for multi-currency trading.
+def read_historical_data(path: str):
+    """Read historical OHLCVT rows from a Kraken CSV file.
 
     Args:
-        path (Any): The path value.
+        path: Path to a Kraken OHLCVT CSV file. Rows with headers or malformed
+            column counts are skipped.
 
     Returns:
-        Any: The computed or requested result.
+        A list of dictionaries with ``time``, ``open``, ``high``, ``low``,
+        ``close``, ``volume``, and ``trades`` fields.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+        ValueError: If a well-formed row contains a value that cannot be
+            converted to the expected numeric type.
     """
     data = []
 
@@ -55,19 +68,22 @@ def read_historical_data(path):
 
 
 def load_data(
-        pairs,
+        pairs: Mapping[str, str],
         base_path: str = "../data/Kraken_OHLCVT/",
         interval: int = 1
     ):
-    """Load the data.
+    """Load Kraken OHLCVT CSV data for the configured pairs.
 
     Args:
-        pairs (Any): The pairs value.
-        base_path (str): The base path value. Defaults to ``'../data/Kraken_OHLCVT/'``.
-        interval (int): The interval value. Defaults to ``1``.
+        pairs: Mapping of display names to Kraken pair symbols.
+        base_path: Directory containing Kraken CSV files.
+        interval: Interval suffix used in the expected filename pattern
+            ``{symbol}_{interval}.csv``.
 
     Returns:
-        Any: The computed or requested result.
+        A dictionary keyed by display name, with each value sorted by the
+        ``time`` field. Missing files are reported to stdout and omitted from
+        the result.
     """
     data = {}
 
@@ -83,70 +99,35 @@ def load_data(
     return data
 
 
-def align_data(data, interval):
-    """Align data for multi-currency trading.
-
-    Args:
-        data (Any): The data value.
-        interval (Any): The interval value.
-
-    Returns:
-        Any: The computed or requested result.
-    """
-    aligned_data, dt = {}, timedelta(minutes=interval)
-
-    print("Determining common time range for alignment...")
-    min_time = max([data[name][ 0]['time'] for name in data])
-    max_time = min([data[name][-1]['time'] for name in data])
-    print(f"Common time range: {min_time} to {max_time}")
-
-    for name in data:
-        print(f"Aligning data for {name}...")
-        print(f"Total range for {name}: {data[name][0]['time']} to {data[name][-1]['time']}")
-        filtered_data = [d for d in data[name] if d['time'] >= min_time and d['time'] <= max_time]
-
-        new_data, times = [], []
-        i, t = 0, min_time
-        while t < max_time:
-            if filtered_data[i]['time'] == t:
-                new_data.append({**filtered_data[i].copy(), 'time': t})
-                i += 1
-            else:
-                new_data.append({**filtered_data[i-1].copy(), 'time': t})
-            times.append(t)
-            t += dt
-
-        aligned_data[name] = new_data
-
-    return aligned_data, times
-
-
 def align_data(
     data: Dict[str, List[dict]],
     interval_minutes: int,
     include_end: bool = False,
-    allow_backfill: bool = False,   # if False, leave leading gaps as None until first point
+    allow_backfill: bool = False,
 ) -> Tuple[Dict[str, List[dict]], List[datetime]]:
-    """Aligns multiple time-ordered series of dicts (with 'time' keys) to a common grid.
-
-    - Forward-fills between observed points.
-    - Optionally backfills (use first point) before the first observation.
-    - Computes a common range across series.
-    - Safe against empty series or missing overlap.
+    """Align multiple time-ordered OHLCVT series to a common time grid.
 
     Args:
-        data (Dict[str, List[dict]]): The data value.
-        interval_minutes (int): The interval minutes value.
-        include_end (bool): The include end value. Defaults to ``False``.
-        allow_backfill (bool): The allow backfill value. Defaults to ``False``.
+        data: Mapping of series names to row dictionaries containing a
+            ``time`` key.
+        interval_minutes: Grid interval in minutes. Must be greater than zero.
+        include_end: Whether to include the final snapped timestamp in the
+            output grid.
+        allow_backfill: Whether to fill leading gaps with the first known row.
+            If false, leading gaps are represented by a dictionary containing
+            only ``time``.
 
     Returns:
-        Tuple[Dict[str, List[dict]], List[datetime]]: The computed or requested result.
+        A tuple of ``(aligned, times)``. ``aligned`` is keyed like ``data`` and
+        contains one row per timestamp in ``times``.
+
+    Raises:
+        ValueError: If ``interval_minutes`` is less than or equal to zero.
+        KeyError: If any non-empty input row is missing the ``time`` key.
     """
     if interval_minutes <= 0:
         raise ValueError("interval_minutes must be > 0")
 
-    # Ensure each list is sorted and non-empty
     series = {}
     for name, rows in data.items():
         if not rows:
@@ -154,31 +135,19 @@ def align_data(
             continue
         series[name] = sorted(rows, key=lambda d: d["time"])
 
-    # Determine common overlap
     starts = [rows[0]["time"] for rows in series.values() if rows]
-    ends   = [rows[-1]["time"] for rows in series.values() if rows]
+    ends = [rows[-1]["time"] for rows in series.values() if rows]
     if not starts or not ends:
-        # no non-empty series
         return {name: [] for name in data}, []
 
     min_time = max(starts)
     max_time = min(ends)
     if min_time > max_time:
-        # no overlap across series
         return {name: [] for name in data}, []
 
     dt = timedelta(minutes=interval_minutes)
 
-    # Snap min_time up to the grid, max_time down/up depending on include_end
     def snap_up(t: datetime) -> datetime:
-        """Snap up for multi-currency trading.
-
-        Args:
-            t (datetime): The t value.
-
-        Returns:
-            datetime: The computed or requested result.
-        """
         delta = (t - datetime(t.year, t.month, t.day))
         offset = (delta.total_seconds() // (dt.total_seconds())) * dt
         snapped = datetime(t.year, t.month, t.day) + offset
@@ -187,25 +156,16 @@ def align_data(
         return snapped
 
     def snap_down(t: datetime) -> datetime:
-        """Snap down for multi-currency trading.
-
-        Args:
-            t (datetime): The t value.
-
-        Returns:
-            datetime: The computed or requested result.
-        """
         delta = (t - datetime(t.year, t.month, t.day))
         offset = (delta.total_seconds() // (dt.total_seconds())) * dt
         return datetime(t.year, t.month, t.day) + offset
 
     grid_start = snap_up(min_time)
-    grid_end   = snap_down(max_time)
+    grid_end = snap_down(max_time)
 
     if grid_start > grid_end and not include_end:
         return {name: [] for name in data}, []
 
-    # Build the grid once
     times: List[datetime] = []
     t = grid_start
     if include_end:
@@ -221,34 +181,29 @@ def align_data(
     if not times:
         return aligned, times
 
-    # Align each series using a pointer and forward-fill
     for name, rows in series.items():
         if not rows:
-            aligned[name] = [{**{}, "time": tt} for tt in times]  # or just []
+            aligned[name] = [{**{}, "time": tt} for tt in times]
             continue
 
         out: List[dict] = []
         i = 0
         last = None
 
-        # advance i so that rows[i]['time'] <= times[0] if possible
         while i < len(rows) and rows[i]["time"] <= times[0]:
             last = rows[i]
             i += 1
 
         for tt in times:
-            # Bring 'last' up to the most recent row at or before tt
             while i < len(rows) and rows[i]["time"] <= tt:
                 last = rows[i]
                 i += 1
 
             if last is None:
-                # No past sample yet: either leave None or backfill from first row
                 value = rows[0] if allow_backfill else None
             else:
                 value = last
 
-            # Create an aligned record; keep original fields if we have a value
             if value is None:
                 out.append({"time": tt})
             else:
@@ -260,23 +215,25 @@ def align_data(
 
 
 def load_and_align_data(
-        pairs,
+        pairs: Mapping[str, str],
         base_path: str = "../data/Kraken_OHLCVT/",
         interval: int = 1,
         include_end: bool = False,
         allow_backfill: bool = False
     ):
-    """Load the and align data.
+    """Load Kraken CSV data and align it to a common interval grid.
 
     Args:
-        pairs (Any): The pairs value.
-        base_path (str): The base path value. Defaults to ``'../data/Kraken_OHLCVT/'``.
-        interval (int): The interval value. Defaults to ``1``.
-        include_end (bool): The include end value. Defaults to ``False``.
-        allow_backfill (bool): The allow backfill value. Defaults to ``False``.
+        pairs: Mapping of display names to Kraken pair symbols.
+        base_path: Directory containing Kraken CSV files.
+        interval: Interval suffix used for loading files and the alignment grid
+            size in minutes.
+        include_end: Whether to include the final snapped timestamp in the
+            output grid.
+        allow_backfill: Whether to fill leading gaps with the first known row.
 
     Returns:
-        Any: The computed or requested result.
+        A tuple of ``(aligned_data, times)`` from :func:`align_data`.
     """
     data = load_data(pairs, base_path, interval)
 
@@ -289,21 +246,21 @@ def load_and_align_data(
     return aligned_data, times
 
 
-def get_field(data: list, field: str) -> float:
-    """Convert a datetime to a float timestamp.
+def get_field(data: Mapping[str, List[Mapping[str, Any]]], field: str) -> list[list[Any]]:
+    """Return one field across all named series.
 
     Args:
-        data (list): The data value.
-        field (str): The field value.
+        data: Mapping of series names to row dictionaries.
+        field: Field name to extract from each row.
 
     Returns:
-        float: The computed or requested result.
+        A list containing one list of extracted values per series, preserving
+        the iteration order of ``data``.
+
+    Raises:
+        KeyError: If any row does not contain ``field``.
     """
     result = []
     for name in data:
         result.append([d[field] for d in data[name]])
     return result
-
-
-
-
