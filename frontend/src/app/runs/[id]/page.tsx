@@ -54,6 +54,37 @@ export default function RunDetail({ params }: { params: Promise<{ id: string }> 
   const progress = latestUpdate?.percent ?? 0;
   const isActive = run.status === "running" || run.status === "queued";
 
+  // Current-episode header data (training only).
+  const currentEpisode = !isValidation
+    ? events.reduce((max, e) => (e.episode > max ? e.episode : max), 0)
+    : 0;
+  const currentEpEvents = !isValidation
+    ? events.filter((e) => e.episode === currentEpisode)
+    : [];
+  const currentEpEndEvent = !isValidation
+    ? events.find((e) => e.kind === "episode_end" && e.episode === currentEpisode)
+    : undefined;
+  const currentEpLastUpdate = !isValidation
+    ? [...currentEpEvents].reverse().find((e) => e.kind === "update")
+    : undefined;
+  // Mean past-episode length used to estimate current-episode progress %.
+  const pastLengths = !isValidation
+    ? events
+        .filter((e) => e.kind === "episode_end" && e.episode !== currentEpisode)
+        .map((e) => Number(e.metrics.episode_length ?? e.step))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+  const avgPastLength =
+    pastLengths.length > 0
+      ? pastLengths.reduce((a, b) => a + b, 0) / pastLengths.length
+      : null;
+  const currentEpStep = currentEpEvents.reduce((max, e) => (e.step > max ? e.step : max), 0);
+  const currentEpProgressPct = currentEpEndEvent
+    ? 100
+    : avgPastLength
+    ? Math.min(100, (currentEpStep / avgPastLength) * 100)
+    : 0;
+
   return (
     <>
       <PageHeader
@@ -145,6 +176,82 @@ export default function RunDetail({ params }: { params: Promise<{ id: string }> 
           </CardContent>
         </Card>
       </div>
+
+      {!isValidation && currentEpisode > 0 && (
+        <div className="mt-4 grid gap-4 md:grid-cols-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">
+                Current episode
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl font-semibold tabular-nums">{currentEpisode}</p>
+              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary/80 transition-all"
+                  style={{ width: `${currentEpProgressPct}%` }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                step {formatNumber(currentEpStep, 0)}
+                {avgPastLength && !currentEpEndEvent
+                  ? ` of ~${formatNumber(avgPastLength, 0)}`
+                  : ""}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">
+                Episode avg reward
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl font-semibold tabular-nums">
+                {formatNumber(
+                  currentEpEndEvent?.avg_reward ?? currentEpLastUpdate?.avg_reward ?? null
+                )}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {currentEpEndEvent ? "final" : isActive ? "live" : "—"}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">
+                Latest total loss
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl font-semibold tabular-nums">
+                {formatNumber(
+                  currentEpLastUpdate
+                    ? Number(currentEpLastUpdate.metrics.total_loss ?? NaN)
+                    : null
+                )}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">
+                Latest entropy
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl font-semibold tabular-nums">
+                {formatNumber(
+                  currentEpLastUpdate
+                    ? Number(currentEpLastUpdate.metrics.entropy ?? NaN)
+                    : null
+                )}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <Tabs defaultValue={isValidation ? "results" : "metrics"} className="mt-6">
         <TabsList>

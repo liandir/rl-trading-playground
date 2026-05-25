@@ -92,6 +92,8 @@ def run_training(
         )
         agent.buffer.clear()
         ep_rewards: list[float] = []
+        rollout_hold_count = 0
+        rollout_action_count = 0
         wall_t0 = time.monotonic()
         sink.emit("episode_start", episode=episode, message=f"episode {episode}")
 
@@ -131,6 +133,11 @@ def run_training(
             )
             if actions is not None:
                 ep_rewards.append(float(rewards.mean()))
+                # Count hold actions (encoded as 0) over the current rollout
+                # window so we can report the policy's hold fraction per update.
+                act_tensor = actions if isinstance(actions, torch.Tensor) else actions[0]
+                rollout_hold_count += int((act_tensor == 0).sum().item())
+                rollout_action_count += int(act_tensor.numel())
 
             terminal = bool(dones.any()) or step >= config.max_steps
 
@@ -161,6 +168,12 @@ def run_training(
                         )
                         total_updates += 1
                         metrics = _metric_means(loss_dict)
+                        if rollout_action_count > 0:
+                            metrics["hold_frac"] = (
+                                rollout_hold_count / rollout_action_count
+                            )
+                        rollout_hold_count = 0
+                        rollout_action_count = 0
                         sink.emit(
                             "update",
                             episode=episode,
@@ -207,6 +220,10 @@ def run_training(
             avg_reward=(sum(ep_rewards) / max(1, len(ep_rewards))) if ep_rewards else None,
             avg_portfolio=final_portfolio,
             sim_elapsed=f"{time.monotonic() - wall_t0:.1f}s wall",
+            metrics={
+                "total_reward": float(sum(ep_rewards)),
+                "episode_length": float(len(ep_rewards)),
+            },
             message=f"episode {episode} finished",
         )
         if stopped:

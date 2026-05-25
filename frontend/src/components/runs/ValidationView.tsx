@@ -1,10 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Loader2, RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ValidationArtifact, ValidationSeries } from "@/lib/api-types";
 import { StreamingChart, type Series } from "@/components/charts/StreamingChart";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty";
 import { formatNumber, formatPercent } from "@/lib/format";
@@ -73,6 +75,8 @@ function MetricsSummary({ metrics }: { metrics: ValidationArtifact["metrics"] })
 }
 
 function ValidationCharts({ series }: { series: ValidationSeries }) {
+  const [resetSignal, setResetSignal] = useState(0);
+
   const valueSeries: Series[] = [
     { name: "Portfolio", values: series.portfolio_value },
     { name: "Cash", values: series.cash },
@@ -103,22 +107,60 @@ function ValidationCharts({ series }: { series: ValidationSeries }) {
   ];
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Panel title="Portfolio value & cash">
-        <StreamingChart series={valueSeries} height={240} />
-      </Panel>
-      <Panel title="Normalized prices vs portfolio">
-        <StreamingChart series={priceSeries} height={240} />
-      </Panel>
-      <Panel title="Drawdown">
-        <StreamingChart series={drawdownSeries} height={220} />
-      </Panel>
-      <Panel title="Rewards">
-        <StreamingChart series={rewardSeries} height={220} />
-      </Panel>
-      <Panel title="Cumulative actions" wide>
-        <StreamingChart series={actionSeries} height={220} />
-      </Panel>
+    <div className="space-y-4">
+      <div>
+        <Button variant="outline" size="sm" onClick={() => setResetSignal((n) => n + 1)}>
+          <RotateCcw className="h-3.5 w-3.5" />
+          Reset all views
+        </Button>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="Portfolio value & cash">
+          <StreamingChart
+            series={valueSeries}
+            xLabel="step"
+            yLabel="value ($)"
+            resetSignal={resetSignal}
+            height={240}
+          />
+        </Panel>
+        <Panel title="Normalized prices vs portfolio">
+          <StreamingChart
+            series={priceSeries}
+            xLabel="step"
+            yLabel="normalized"
+            resetSignal={resetSignal}
+            height={240}
+          />
+        </Panel>
+        <Panel title="Drawdown">
+          <StreamingChart
+            series={drawdownSeries}
+            xLabel="step"
+            yLabel="drawdown (%)"
+            resetSignal={resetSignal}
+            height={220}
+          />
+        </Panel>
+        <Panel title="Rewards">
+          <StreamingChart
+            series={rewardSeries}
+            xLabel="step"
+            yLabel="reward"
+            resetSignal={resetSignal}
+            height={220}
+          />
+        </Panel>
+        <Panel title="Cumulative actions" wide>
+          <StreamingChart
+            series={actionSeries}
+            xLabel="step"
+            yLabel="count"
+            resetSignal={resetSignal}
+            height={220}
+          />
+        </Panel>
+      </div>
     </div>
   );
 }
@@ -133,7 +175,7 @@ function Panel({
   wide?: boolean;
 }) {
   return (
-    <div className={"surface p-4 " + (wide ? "lg:col-span-2" : "")}>
+    <div className={"surface relative p-4 " + (wide ? "lg:col-span-2" : "")}>
       <h3 className="text-sm font-semibold mb-3">{title}</h3>
       {children}
     </div>

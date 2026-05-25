@@ -1,10 +1,10 @@
 "use client";
 
-import { Suspense, useMemo } from "react";
+import { Suspense, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQueries } from "@tanstack/react-query";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
 import type { RunEvent, RunRecord } from "@/lib/api-types";
 import { StreamingChart, type Series } from "@/components/charts/StreamingChart";
@@ -32,6 +32,7 @@ export default function ComparePageWrapper() {
 }
 
 function ComparePage() {
+  const [resetSignal, setResetSignal] = useState(0);
   const params = useSearchParams();
   const ids = useMemo(
     () =>
@@ -138,17 +139,39 @@ function ComparePage() {
         </CardContent>
       </Card>
 
-      <h2 className="mt-6 mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Overlay
-      </h2>
+      <div className="mt-6 mb-3 flex items-center justify-between">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Overlay
+        </h2>
+        <Button variant="outline" size="sm" onClick={() => setResetSignal((n) => n + 1)}>
+          <RotateCcw className="h-3.5 w-3.5" />
+          Reset all views
+        </Button>
+      </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <MetricPanel title="Average reward" runs={runs} events={eventsByRun} pickValue={(e) => Number(e.avg_reward ?? NaN)} />
-        <MetricPanel title="Average portfolio" runs={runs} events={eventsByRun} pickValue={(e) => Number(e.avg_portfolio ?? NaN)} />
+        <MetricPanel
+          title="Average reward"
+          runs={runs}
+          events={eventsByRun}
+          pickValue={(e) => Number(e.avg_reward ?? NaN)}
+          yLabel="reward"
+          resetSignal={resetSignal}
+        />
+        <MetricPanel
+          title="Average portfolio"
+          runs={runs}
+          events={eventsByRun}
+          pickValue={(e) => Number(e.avg_portfolio ?? NaN)}
+          yLabel="portfolio value"
+          resetSignal={resetSignal}
+        />
         <MetricPanel
           title="Total loss"
           runs={runs}
           events={eventsByRun}
           pickValue={(e) => Number(e.metrics.total_loss ?? NaN)}
+          yLabel="loss"
+          resetSignal={resetSignal}
           updateOnly
         />
         <MetricPanel
@@ -156,6 +179,8 @@ function ComparePage() {
           runs={runs}
           events={eventsByRun}
           pickValue={(e) => Number(e.metrics.entropy ?? NaN)}
+          yLabel="entropy (nats)"
+          resetSignal={resetSignal}
           updateOnly
         />
       </div>
@@ -225,12 +250,16 @@ function MetricPanel({
   runs,
   events,
   pickValue,
+  yLabel,
+  resetSignal,
   updateOnly,
 }: {
   title: string;
   runs: RunRecord[];
   events: RunEvent[][];
   pickValue: (e: RunEvent) => number;
+  yLabel?: string;
+  resetSignal?: number;
   updateOnly?: boolean;
 }) {
   const series: Series[] = runs.map((run, i) => {
@@ -243,9 +272,15 @@ function MetricPanel({
     };
   });
   return (
-    <div className="surface p-4">
+    <div className="surface relative p-4">
       <h3 className="text-sm font-semibold mb-3">{title}</h3>
-      <StreamingChart series={series} height={220} />
+      <StreamingChart
+        series={series}
+        xLabel="event index"
+        yLabel={yLabel}
+        resetSignal={resetSignal}
+        height={220}
+      />
     </div>
   );
 }
