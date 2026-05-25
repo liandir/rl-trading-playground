@@ -6,7 +6,7 @@ normalized JSONL store, asset tagging via alias dictionary.
 This package is intentionally **independent** of the rest of this
 repository (no imports from `kraken`, `agent`, `environment`, ...). It
 is designed to be extracted into its own repo later and installed via
-`uv` (the same way `forex` is).
+`uv`.
 
 ## Quickstart
 

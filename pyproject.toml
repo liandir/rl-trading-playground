@@ -10,7 +10,6 @@ requires-python = ">=3.11"
 dependencies = [
     "bokeh>=3.9.0",
     "fastapi>=0.115.0",
-    "forex",
     "matplotlib>=3.10.9",
     "pydantic>=2.7",
     "pydoc-builder",
@@ -33,12 +32,12 @@ dev = [
     "ipykernel>=7.2.0",
     "jupyter>=1.1.1",
     "notebook>=7.5.5",
+    "pandas>=3.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
 
 [tool.uv.sources]
-forex = { git = "ssh://git@github.com/liandir/forex.git" }
 pydoc-builder = { git = "ssh://git@github.com/liandir/pydoc-builder.git", rev = "main" }
 
 [project.urls]

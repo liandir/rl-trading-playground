@@ -685,16 +685,6 @@ wheels = [
 ]
 
 [[package]]
-name = "forex"
-version = "0.1.0"
-source = { git = "ssh://git@github.com/liandir/forex.git#2dfe03780dbdb90209f3fead795914a2b7d1ef24" }
-dependencies = [
-    { name = "pandas" },
-    { name = "requests" },
-    { name = "torch" },
-]
-
-[[package]]
 name = "fqdn"
 version = "1.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2485,7 +2475,6 @@ source = { editable = "." }
 dependencies = [
     { name = "bokeh" },
     { name = "fastapi" },
-    { name = "forex" },
     { name = "matplotlib" },
     { name = "pydantic" },
     { name = "pydoc-builder" },
@@ -2504,6 +2493,7 @@ dev = [
     { name = "ipykernel" },
     { name = "jupyter" },
     { name = "notebook" },
+    { name = "pandas" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -2512,7 +2502,6 @@ dev = [
 requires-dist = [
     { name = "bokeh", specifier = ">=3.9.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
-    { name = "forex", git = "ssh://git@github.com/liandir/forex.git" },
     { name = "matplotlib", specifier = ">=3.10.9" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydoc-builder", git = "ssh://git@github.com/liandir/pydoc-builder.git?rev=main" },
@@ -2531,6 +2520,7 @@ dev = [
     { name = "ipykernel", specifier = ">=7.2.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "notebook", specifier = ">=7.5.5" },
+    { name = "pandas", specifier = ">=3.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
 ]
