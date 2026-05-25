@@ -1,5 +1,5 @@
 [project]
-name = "multi-currency-trading"
+name = "rl-trading-playground"
 version = "0.1.0"
 description = "A multi-currency trading package."
 authors = [
@@ -42,4 +42,4 @@ forex = { git = "ssh://git@github.com/liandir/forex.git" }
 pydoc-builder = { git = "ssh://git@github.com/liandir/pydoc-builder.git", rev = "main" }
 
 [project.urls]
-Repository = "https://github.com/liandir/multi-currency-trading"
+Repository = "https://github.com/liandir/rl-trading-playground"

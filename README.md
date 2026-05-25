@@ -1,4 +1,4 @@
-# Multi-Currency Trading
+# RL Trading Playground
 
 A research codebase for training and evaluating deep reinforcement learning
 agents on multi-asset currency trading. The repository bundles trading
