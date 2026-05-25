@@ -16,18 +16,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the FastAPI backend and Next.js frontend together.
-
-    Args:
-        argv: Optional command-line arguments. If omitted, arguments are read
-            from ``sys.argv``.
-
-    Returns:
-        Process-style exit code. Returns ``0`` when the command is interrupted
-        cleanly, ``2`` for local configuration errors, or the first child
-        process exit code when a child exits unexpectedly.
-    """
-    args = _parse_args(argv)
+    """Run the FastAPI backend and Next.js frontend together."""
+    parser = _build_parser()
+    args = parser.parse_args(argv)
     frontend_dir = args.frontend_dir.resolve()
 
     if not frontend_dir.is_dir():
@@ -36,19 +27,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     if shutil.which("npm") is None:
         print("npm was not found on PATH; install Node.js/npm to run the frontend.", file=sys.stderr)
         return 2
-    if not _ensure_frontend_dependencies(frontend_dir):
+    if not _ensure_frontend_dependencies(frontend_dir, parser.prog):
         return 2
 
     backend_url = f"http://{args.backend_host}:{args.backend_port}"
     frontend_origin = f"http://{args.frontend_host}:{args.frontend_port}"
+    candidate_origins = [
+        frontend_origin,
+        f"http://localhost:{args.frontend_port}",
+        f"http://127.0.0.1:{args.frontend_port}",
+    ]
+    # 0.0.0.0 is a bind address, not a valid browser origin — drop it when
+    # the user opted into binding the frontend to all interfaces.
     cors_origins = ",".join(
-        dict.fromkeys(
-            [
-                frontend_origin,
-                f"http://localhost:{args.frontend_port}",
-                f"http://127.0.0.1:{args.frontend_port}",
-            ]
-        )
+        dict.fromkeys(o for o in candidate_origins if "//0.0.0.0:" not in o)
     )
 
     backend_env = os.environ.copy()
@@ -92,10 +84,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Starting backend at {backend_url}", flush=True)
         backend = subprocess.Popen(backend_cmd, cwd=REPO_ROOT, env=backend_env)
         processes.append(backend)
+        if stopping:
+            return 0
 
         print(f"Starting frontend at {frontend_origin}", flush=True)
         frontend = subprocess.Popen(frontend_cmd, cwd=frontend_dir, env=frontend_env)
         processes.append(frontend)
+        if stopping:
+            return 0
 
         return _wait_for_exit(processes, lambda: stopping)
     finally:
@@ -104,16 +100,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         _terminate(processes)
 
 
-def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
-    """Parse command-line arguments for the studio launcher.
-
-    Args:
-        argv: Optional command-line arguments. If omitted, ``argparse`` reads
-            from ``sys.argv``.
-
-    Returns:
-        Parsed launcher arguments.
-    """
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argparse parser for the studio launcher."""
     parser = argparse.ArgumentParser(
         prog="autotrading-playground",
         description="Run the trading studio backend and frontend.",
@@ -123,20 +111,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--frontend-host", default="127.0.0.1")
     parser.add_argument("--frontend-port", type=int, default=3000)
     parser.add_argument("--frontend-dir", type=Path, default=REPO_ROOT / "frontend")
-    return parser.parse_args(argv)
+    return parser
 
 
-def _ensure_frontend_dependencies(frontend_dir: Path) -> bool:
-    """Install frontend dependencies if the local Next.js binary is missing.
-
-    Args:
-        frontend_dir: Path to the frontend project directory.
-
-    Returns:
-        True when dependencies are already present or install successfully.
-        False when the frontend package metadata is missing or installation
-        fails.
-    """
+def _ensure_frontend_dependencies(frontend_dir: Path, prog: str) -> bool:
+    """Install frontend deps if the local Next.js binary is missing."""
     if _has_frontend_dependencies(frontend_dir):
         return True
 
@@ -148,8 +127,7 @@ def _ensure_frontend_dependencies(frontend_dir: Path) -> bool:
     completed = subprocess.run(["npm", "install"], cwd=frontend_dir)
     if completed.returncode != 0:
         print(
-            "frontend dependency installation failed; fix the npm error above "
-            "and rerun `uv run autotrading-playground`.",
+            f"frontend dependency installation failed; fix the npm error above and rerun `{prog}`.",
             file=sys.stderr,
         )
         return False
@@ -166,15 +144,7 @@ def _ensure_frontend_dependencies(frontend_dir: Path) -> bool:
 
 
 def _has_frontend_dependencies(frontend_dir: Path) -> bool:
-    """Return whether the frontend has the local Next.js executable installed.
-
-    Args:
-        frontend_dir: Path to the frontend project directory.
-
-    Returns:
-        True if a platform-specific local Next.js executable exists in
-        ``node_modules/.bin``.
-    """
+    """Whether the local Next.js executable is installed in node_modules/.bin."""
     bin_dir = frontend_dir / "node_modules" / ".bin"
     return (bin_dir / "next").exists() or (bin_dir / "next.cmd").exists()
 
@@ -183,38 +153,24 @@ def _wait_for_exit(
     processes: list[subprocess.Popen[bytes]],
     is_stopping: Callable[[], bool],
 ) -> int:
-    """Wait until one managed subprocess exits.
-
-    Args:
-        processes: Subprocesses managed by the launcher.
-        is_stopping: Callback that returns whether shutdown was requested by
-            this process.
-
-    Returns:
-        ``0`` for a clean requested shutdown, otherwise the first exited child
-        process return code.
-    """
+    """Wait until one managed subprocess exits, then return its exit code."""
     while True:
         for process in processes:
             code = process.poll()
             if code is None:
                 continue
             _terminate([p for p in processes if p is not process])
-            return 0 if is_stopping() and code in (0, -signal.SIGTERM) else code
+            return 0 if is_stopping() else code
         time.sleep(0.2)
 
 
 def _terminate(processes: list[subprocess.Popen[bytes]]) -> None:
-    """Terminate managed subprocesses, killing any that do not stop quickly.
-
-    Args:
-        processes: Subprocesses to terminate.
-    """
+    """Terminate managed subprocesses, escalating to kill after 10s."""
     live = [process for process in processes if process.poll() is None]
     for process in live:
         process.terminate()
 
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 10
     for process in live:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
