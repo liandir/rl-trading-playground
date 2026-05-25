@@ -2194,7 +2194,7 @@ wheels = [
 [[package]]
 name = "pydoc-builder"
 version = "0.1.0"
-source = { git = "https://github.com/liandir/pydoc-builder.git?rev=main#76b5c82951dd1003360f7eb4b243593f93a32ccf" }
+source = { git = "https://github.com/liandir/pydoc-builder.git?rev=main#51b36f28030ed0b9db37f99d42fc7ce7b7e6265e" }
 
 [[package]]
 name = "pygments"

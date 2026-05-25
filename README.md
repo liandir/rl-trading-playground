@@ -120,19 +120,6 @@ Training experiments live in [notebooks/](notebooks/). Each notebook pairs an
 environment with an agent and network configuration. Configuration files for
 batch experiments are kept in [configs/](configs/).
 
-## Live Trading
-
-The `scripts/` directory contains entry points for running live tickers and
-order book streams against Kraken:
-
-```bash
-python3 scripts/live_ticker_stream.py
-python3 scripts/live_book.py
-```
-
-Credentials are loaded from the environment; see `.env.example` for the
-expected variables.
-
 ## Documentation
 
 The documentation is published at
