@@ -1,12 +1,12 @@
 """Store creates, reads, deletes for agents/envs/runs/checkpoints."""
 from __future__ import annotations
 
-from src.api.schemas.agent import AgentConfig
-from src.api.schemas.data import DataConfig
-from src.api.schemas.env import EnvironmentConfig
-from src.api.schemas.run import RunSpec
-from src.api.schemas.training import TrainingConfig
-from src.api.services.store import Store
+from rl_trading_playground.api.schemas.agent import AgentConfig
+from rl_trading_playground.api.schemas.data import DataConfig
+from rl_trading_playground.api.schemas.env import EnvironmentConfig
+from rl_trading_playground.api.schemas.run import RunSpec
+from rl_trading_playground.api.schemas.training import TrainingConfig
+from rl_trading_playground.api.services.store import Store
 
 
 def test_agent_roundtrip(store: Store) -> None:

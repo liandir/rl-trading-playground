@@ -1,6 +1,6 @@
 import asyncio
 
-from src.kraken import KrakenLiveFeed
+from rl_trading_playground.kraken import KrakenLiveFeed
 
 
 async def demo() -> None:

@@ -7,12 +7,12 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from src.api import app as app_module
-from src.api import settings as settings_module
-from src.api.services import events as events_module
-from src.api.services import runner as runner_module
-from src.api.services import store as store_module
-from src.api.settings import Settings
+from rl_trading_playground.api import app as app_module
+from rl_trading_playground.api import settings as settings_module
+from rl_trading_playground.api.services import events as events_module
+from rl_trading_playground.api.services import runner as runner_module
+from rl_trading_playground.api.services import store as store_module
+from rl_trading_playground.api.settings import Settings
 
 
 @pytest.fixture()

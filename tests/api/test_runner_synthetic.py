@@ -12,17 +12,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from src.api.runner.build import build_agent, build_environment, load_market_data
-from src.api.runner.events import EventSink
-from src.api.runner.training import run_training
-from src.api.runner.validation import run_validation
-from src.api.schemas.agent import AgentConfig
-from src.api.schemas.data import DataConfig
-from src.api.schemas.env import EnvironmentConfig
-from src.api.schemas.run import RunSpec
-from src.api.schemas.training import TrainingConfig
-from src.api.schemas.validation import ValidationConfig
-from src.api.services.store import Store
+from rl_trading_playground.api.runner.build import build_agent, build_environment, load_market_data
+from rl_trading_playground.api.runner.events import EventSink
+from rl_trading_playground.api.runner.training import run_training
+from rl_trading_playground.api.runner.validation import run_validation
+from rl_trading_playground.api.schemas.agent import AgentConfig
+from rl_trading_playground.api.schemas.data import DataConfig
+from rl_trading_playground.api.schemas.env import EnvironmentConfig
+from rl_trading_playground.api.schemas.run import RunSpec
+from rl_trading_playground.api.schemas.training import TrainingConfig
+from rl_trading_playground.api.schemas.validation import ValidationConfig
+from rl_trading_playground.api.services.store import Store
 
 
 def test_run_training_emits_jsonl_events(tmp_path: Path) -> None:
@@ -104,7 +104,7 @@ def test_subprocess_entrypoint_runs_training_end_to_end(store: Store, tmp_path: 
     env["STUDIO_STORE"] = str(store.settings.store_root)
     repo_root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
-        [sys.executable, "-m", "src.api.runner", run.id],
+        [sys.executable, "-m", "rl_trading_playground.api.runner", run.id],
         cwd=repo_root,
         env=env,
         capture_output=True,

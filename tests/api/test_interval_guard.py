@@ -6,10 +6,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from src.api.schemas.agent import AgentConfig, AgentRecord
-from src.api.schemas.data import DataConfig
-from src.api.services.compat import check_interval, read_sidecar
-from src.api.services.store import Store
+from rl_trading_playground.api.schemas.agent import AgentConfig, AgentRecord
+from rl_trading_playground.api.schemas.data import DataConfig
+from rl_trading_playground.api.services.compat import check_interval, read_sidecar
+from rl_trading_playground.api.services.store import Store
 
 
 def _stub_agent_with_sidecar(

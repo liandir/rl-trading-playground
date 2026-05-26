@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.environment.longshort_hierarchical_leverage import (
+from rl_trading_playground.environment.longshort_hierarchical_leverage import (
     BatchedLongShortHierarchicalLeverageEnv,
     LongShortHierarchicalLeverageEnv,
 )

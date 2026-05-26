@@ -33,7 +33,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Build docs
-        run: uv run pydoc-builder --package src
+        run: uv run pydoc-builder --project-root src --package rl_trading_playground --docs-dir ../docs
 
       - name: Disable Jekyll
         run: touch docs/.nojekyll

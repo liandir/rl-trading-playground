@@ -2,7 +2,7 @@ import asyncio
 import signal
 import sys
 
-from src.kraken import KrakenLiveFeed
+from rl_trading_playground.kraken import KrakenLiveFeed
 
 
 PAIR = sys.argv[1] if len(sys.argv) > 1 else "BTC/USD"

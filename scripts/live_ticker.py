@@ -9,7 +9,7 @@ Example:
 
 import sys
 import time
-from src.kraken import KrakenSpotClient
+from rl_trading_playground.kraken import KrakenSpotClient
 
 PAIR = sys.argv[1] if len(sys.argv) > 1 else "BTC/USD"
 DEPTH = 5

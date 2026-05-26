@@ -5,17 +5,17 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from src.api.services.store import Store
+from rl_trading_playground.api.services.store import Store
 
 
 def _seed(store: Store) -> tuple[str, str, str]:
     """Create one run with a checkpoint file on disk and one agent. Returns (run_id, ckpt_id, agent_id)."""
 
-    from src.api.schemas.agent import AgentConfig
-    from src.api.schemas.data import DataConfig
-    from src.api.schemas.env import EnvironmentConfig
-    from src.api.schemas.run import RunSpec
-    from src.api.schemas.training import TrainingConfig
+    from rl_trading_playground.api.schemas.agent import AgentConfig
+    from rl_trading_playground.api.schemas.data import DataConfig
+    from rl_trading_playground.api.schemas.env import EnvironmentConfig
+    from rl_trading_playground.api.schemas.run import RunSpec
+    from rl_trading_playground.api.schemas.training import TrainingConfig
 
     spec = RunSpec(
         kind="training",

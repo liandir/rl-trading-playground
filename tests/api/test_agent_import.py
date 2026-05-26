@@ -7,10 +7,10 @@ from pathlib import Path
 import torch
 from fastapi.testclient import TestClient
 
-from src.api.runner.build import build_agent, build_environment, load_market_data
-from src.api.schemas.agent import AgentConfig
-from src.api.schemas.data import DataConfig
-from src.api.schemas.env import EnvironmentConfig
+from rl_trading_playground.api.runner.build import build_agent, build_environment, load_market_data
+from rl_trading_playground.api.schemas.agent import AgentConfig
+from rl_trading_playground.api.schemas.data import DataConfig
+from rl_trading_playground.api.schemas.env import EnvironmentConfig
 
 
 def _make_ptm(tmp: Path) -> Path:

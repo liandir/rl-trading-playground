@@ -6,28 +6,9 @@ environments, neural network architectures, RL algorithms, live market
 connectors, and the supporting tooling needed to run end-to-end experiments
 from historical data to live execution.
 
-## Repository Layout
-
-```
-src/
-├── agent/        RL algorithms (AAC, AAQ, PPO and hierarchical / auxiliary / spatiotemporal variants)
-├── api/          FastAPI backend for the trading studio
-├── data/         Dataset loading and preprocessing helpers
-├── environment/  Trading environments (discrete, generic, hybrid, live)
-├── network/      Neural network building blocks and full architectures
-├── kraken/       Kraken REST and WebSocket connectors for live data and order flow
-├── news/         News collection, deduplication, and tagging pipeline
-└── evaluate/     Visualisation and evaluation helpers
-frontend/         Next.js frontend for the trading studio
-configs/          Experiment configuration files
-notebooks/        Training and analysis notebooks
-scripts/          Utility scripts (live feeds, notebook tooling)
-tests/            Test suite
-```
-
 ## Components
 
-### Environments (`src/environment/`)
+### Environments (`src/rl_trading_playground/environment/`)
 
 Several flavours of multi-asset trading environments are provided. Each module
 documents its own state space, action space, and reward modes in its docstring.
@@ -39,28 +20,28 @@ documents its own state space, action space, and reward modes in its docstring.
 - `hybrid/` — mixed continuous/discrete environments.
 - `live.py` — live execution wrapper backed by the Kraken connectors.
 
-### Agents (`src/agent/`)
+### Agents (`src/rl_trading_playground/agent/`)
 
 Implementations of advantage actor-critic (AAC), advantage actor-Q (AAQ), and
 PPO, together with hierarchical, auxiliary-loss, model-based, and
 spatiotemporal variants used in the training notebooks.
 
-### Networks (`src/network/`)
+### Networks (`src/rl_trading_playground/network/`)
 
 Reusable neural network components in `core/` (attention, recurrent,
 feedforward heads, per-asset branches) and full architectures that compose
 them for action, value, action-value, and model heads, including
 attention-memory and spatiotemporal variants.
 
-### Market Connectors (`src/kraken/`)
+### Market Connectors (`src/rl_trading_playground/kraken/`)
 
 REST client, WebSocket feed, message models, and resampling utilities for
 Kraken market data and trading.
 
-### News Pipeline (`src/news/`)
+### News Pipeline (`src/rl_trading_playground/news/`)
 
 Configurable news collector with deduplication, tagging, and pluggable
-sources. See [src/news/README.md](src/news/README.md) for details.
+sources. See [src/rl_trading_playground/news/README.md](src/rl_trading_playground/news/README.md) for details.
 
 ## Installation
 
@@ -129,7 +110,7 @@ Build the static documentation site with
 [liandir/pydoc-builder](https://github.com/liandir/pydoc-builder):
 
 ```bash
-uv run pydoc-builder --package src
+uv run pydoc-builder --project-root src --package rl_trading_playground --docs-dir ../docs
 ```
 
 The command reads Python docstrings without importing the project — optional
@@ -137,3 +118,22 @@ runtime dependencies and API credentials are not required to compile the docs
 — and writes a GitHub Pages-compatible site to `docs/`. Open
 `docs/index.html` locally or use the repository's `docs/` folder as the Pages
 source.
+
+## Repository Layout
+
+```
+src/rl_trading_playground/
+├── agent/        RL algorithms (AAC, AAQ, PPO and hierarchical / auxiliary / spatiotemporal variants)
+├── api/          FastAPI backend for the trading studio
+├── data/         Dataset loading and preprocessing helpers
+├── environment/  Trading environments (discrete, generic, hybrid, live)
+├── network/      Neural network building blocks and full architectures
+├── kraken/       Kraken REST and WebSocket connectors for live data and order flow
+├── news/         News collection, deduplication, and tagging pipeline
+└── evaluate/     Visualisation and evaluation helpers
+frontend/         Next.js frontend for the trading studio
+configs/          Experiment configuration files
+notebooks/        Training and analysis notebooks
+scripts/          Utility scripts (live feeds, notebook tooling)
+tests/            Test suite
+```
