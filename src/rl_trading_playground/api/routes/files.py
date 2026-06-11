@@ -55,8 +55,12 @@ def _safe_resolve(raw: str | None) -> Path:
 @router.get("/browse", response_model=BrowseResponse)
 def browse(
     path: str | None = Query(None, description="Directory to list; defaults to repo root."),
-    ext: str | None = Query(None, description="File extension filter (e.g. '.ptm')."),
+    ext: str | None = Query(
+        None,
+        description="File extension filter; comma-separated for multiple (e.g. '.ptm,.pt,.pth').",
+    ),
 ) -> BrowseResponse:
+    exts = {e.strip() for e in ext.split(",") if e.strip()} if ext else None
     target = _safe_resolve(path)
     if not target.exists():
         raise HTTPException(status_code=404, detail="path does not exist")
@@ -68,7 +72,7 @@ def browse(
         if child.name.startswith("."):
             continue
         is_dir = child.is_dir()
-        if not is_dir and ext and child.suffix != ext:
+        if not is_dir and exts and child.suffix not in exts:
             continue
         try:
             stat = child.stat()

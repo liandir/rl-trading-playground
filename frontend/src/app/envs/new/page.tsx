@@ -131,16 +131,22 @@ export default function NewEnvPage() {
               }
             />
           </Field>
-          <Field label="Tau windows (minutes)" className="md:col-span-2" hint="Time windows used in feature extraction.">
+          <Field
+            label="Tau windows (minutes)"
+            className="md:col-span-2"
+            hint="Comma-separated whole minutes used in feature extraction."
+          >
             <Input
               value={config.tau_minutes.join(",")}
               onChange={(e) =>
                 set(
                   "tau_minutes",
+                  // The backend expects integers; drop fractional entries
+                  // instead of letting them 422 on submit.
                   e.target.value
                     .split(",")
                     .map((v) => Number(v.trim()))
-                    .filter((v) => !Number.isNaN(v))
+                    .filter((v) => Number.isInteger(v) && v > 0)
                 )
               }
             />

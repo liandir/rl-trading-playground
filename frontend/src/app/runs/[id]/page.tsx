@@ -48,8 +48,11 @@ export default function RunDetail({ params }: { params: Promise<{ id: string }> 
   }
 
   const isValidation = run.kind === "validation";
+  // warm_up events carry step/percent too, so progress moves during warm-up.
   const latestUpdate = events
-    .filter((e) => (isValidation ? e.kind === "validation_step" : e.kind === "update"))
+    .filter((e) =>
+      isValidation ? e.kind === "validation_step" : e.kind === "update" || e.kind === "warm_up"
+    )
     .at(-1);
   const progress = latestUpdate?.percent ?? 0;
   const isActive = run.status === "running" || run.status === "queued";

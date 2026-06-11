@@ -27,12 +27,66 @@ const PALETTE = [
   "#facc15", // yellow
 ];
 
+const MAX_RENDER_POINTS = 8_000;
+
 function readPalette(): string[] {
   if (typeof window === "undefined") return PALETTE;
   const cs = getComputedStyle(document.documentElement);
   const primary = cs.getPropertyValue("--primary").trim();
   if (!primary) return PALETTE;
   return PALETTE;
+}
+
+type ChartRow = {
+  x: number;
+  ys: (number | null)[];
+};
+
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function sampleRows(rows: ChartRow[]): ChartRow[] {
+  if (rows.length <= MAX_RENDER_POINTS) return rows;
+  if (MAX_RENDER_POINTS <= 2) return rows.slice(-MAX_RENDER_POINTS);
+
+  const last = rows[rows.length - 1];
+  const stride = Math.ceil((rows.length - 2) / (MAX_RENDER_POINTS - 2));
+  const sampled: ChartRow[] = [rows[0]];
+
+  for (let i = stride; i < rows.length - 1; i += stride) {
+    sampled.push(rows[i]);
+  }
+  if (sampled[sampled.length - 1] !== last) sampled.push(last);
+
+  return sampled;
+}
+
+function buildAlignedData(series: Series[], xValues?: number[]): AlignedData {
+  const maxLen = series.reduce((m, s) => Math.max(m, s.values.length), 0);
+  if (maxLen === 0) {
+    return [[], ...series.map(() => [])] as AlignedData;
+  }
+
+  const hasAlignedX = !!xValues && xValues.length === maxLen;
+  const rows: ChartRow[] = [];
+  let prevX = -Infinity;
+
+  for (let i = 0; i < maxLen; i++) {
+    const x = hasAlignedX ? finiteOrNull(xValues[i]) : i;
+    if (x === null || x <= prevX) continue;
+
+    rows.push({
+      x,
+      ys: series.map((s) => (i < s.values.length ? finiteOrNull(s.values[i]) : null)),
+    });
+    prevX = x;
+  }
+
+  const sampled = sampleRows(rows);
+  const xs = sampled.map((row) => row.x);
+  const cols = series.map((_, seriesIdx) => sampled.map((row) => row.ys[seriesIdx]));
+  return [xs, ...cols] as AlignedData;
 }
 
 export function StreamingChart({
@@ -64,20 +118,7 @@ export function StreamingChart({
   const boundariesRef = useRef<EpisodeBoundary[] | undefined>(episodeBoundaries);
   const [isZoomed, setIsZoomed] = useState(false);
 
-  const maxLen = series.reduce((m, s) => Math.max(m, s.values.length), 0);
-  const data: AlignedData = useMemo(() => {
-    const xs =
-      xValues && xValues.length === maxLen
-        ? xValues
-        : Array.from({ length: maxLen }, (_, i) => i);
-    const cols: number[][] = series.map((s) => {
-      if (s.values.length === maxLen) return s.values;
-      const padded = new Array<number>(maxLen).fill(NaN);
-      for (let i = 0; i < s.values.length; i++) padded[i] = s.values[i];
-      return padded;
-    });
-    return [xs, ...cols] as AlignedData;
-  }, [series, maxLen, xValues]);
+  const data = useMemo(() => buildAlignedData(series, xValues), [series, xValues]);
 
   // Keep latest boundaries available to the persistent uPlot instance.
   useEffect(() => {

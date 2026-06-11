@@ -43,9 +43,9 @@ export default function AgentDetail({ params }: { params: Promise<{ id: string }
 
   const a = agent.data;
   const cpList = checkpoints.data ?? [];
-  // Surface runs that produced (or were spawned from) this agent.
+  // Surface runs that reference this agent, plus the run that produced its checkpoint.
   const relatedRuns = (runs.data ?? []).filter(
-    (r) => r.agent_id === a.id || r.parent_run_id === a.parent_run_id
+    (r) => r.agent_id === a.id || r.id === a.parent_run_id
   );
 
   return (

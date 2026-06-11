@@ -172,6 +172,33 @@ export interface RunEvent {
   extra: Record<string, unknown>;
 }
 
+export type DeploymentStatus = "queued" | "running" | "complete" | "stopped" | "failed";
+export type DeploymentMode = "paper";
+
+export interface DeploymentSpec {
+  agent_id: string;
+  env: EnvironmentConfig;
+  pairs: string[];
+  asset_names?: string[] | null;
+  interval_minutes: number;
+  mode: DeploymentMode;
+  override_interval_mismatch: boolean;
+}
+
+export interface DeploymentRecord {
+  id: string;
+  status: DeploymentStatus;
+  name: string;
+  started_at: string;
+  ended_at: string | null;
+  agent_id: string;
+  pid: number | null;
+  exit_code: number | null;
+  notes: string;
+  spec: DeploymentSpec | null;
+  summary: Record<string, number | string | boolean>;
+}
+
 export interface RegistryAgentType {
   name: AgentType;
   family: string;

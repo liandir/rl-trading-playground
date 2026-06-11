@@ -254,7 +254,7 @@ export default function ImportAgentPage() {
         <p className="mt-3 text-sm text-destructive">{(importMut.error as Error).message}</p>
       )}
 
-      <FileBrowser open={pickerOpen} onOpenChange={setPickerOpen} ext=".ptm" onSelect={onPicked} />
+      <FileBrowser open={pickerOpen} onOpenChange={setPickerOpen} onSelect={onPicked} />
     </>
   );
 }

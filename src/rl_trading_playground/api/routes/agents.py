@@ -174,11 +174,23 @@ def import_agent(body: ImportRequest) -> AgentRecord:
         except Exception:
             original_meta = None
 
+    original: CheckpointMeta | None = None
+    if isinstance(original_meta, dict):
+        try:
+            original = CheckpointMeta.model_validate(original_meta)
+        except Exception:
+            original = None
+
     meta = CheckpointMeta(
         agent_config=body.config,
-        step=int(original_meta.get("step", 0)) if isinstance(original_meta, dict) else 0,
-        metric_name=(original_meta or {}).get("metric_name") if isinstance(original_meta, dict) else None,
-        metric_value=(original_meta or {}).get("metric_value") if isinstance(original_meta, dict) else None,
+        # Carry over the training data/env snapshots so compatibility checks
+        # (e.g. bar-interval guards on deployments) keep working post-import.
+        data_config=original.data_config if original else None,
+        env_config=original.env_config if original else None,
+        step=original.step if original else 0,
+        episode=original.episode if original else 0,
+        metric_name=original.metric_name if original else None,
+        metric_value=original.metric_value if original else None,
         parent_run_id=None,
         saved_at=datetime.now(timezone.utc),
         extra={

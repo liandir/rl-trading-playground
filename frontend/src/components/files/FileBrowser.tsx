@@ -12,12 +12,13 @@ import { cn } from "@/lib/cn";
 export function FileBrowser({
   open,
   onOpenChange,
-  ext = ".ptm",
+  ext = ".ptm,.pt,.pth",
   onSelect,
   initialPath,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Extension filter; comma-separated for multiple (e.g. ".ptm,.pt"). */
   ext?: string;
   onSelect: (entry: FileEntry) => void;
   initialPath?: string;
@@ -29,6 +30,7 @@ export function FileBrowser({
     queryFn: () => api.browse(path, ext),
     enabled: open,
   });
+  const extLabel = ext.split(",").map((e) => e.trim()).filter(Boolean).join(" / ");
 
   return (
     <Dialog
@@ -37,7 +39,7 @@ export function FileBrowser({
         onOpenChange(o);
         if (!o) setPicked(null);
       }}
-      title={`Pick a ${ext} file`}
+      title={`Pick a ${extLabel} file`}
       description="Navigate to a checkpoint, then select it."
       width="max-w-3xl"
       footer={

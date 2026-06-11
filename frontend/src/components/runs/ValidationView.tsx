@@ -16,6 +16,9 @@ export function ValidationView({ runId }: { runId: string }) {
     queryKey: ["run-artifact", runId, "validation"],
     queryFn: () => api.runArtifact(runId, "validation"),
     retry: 1,
+    // The artifact 404s until the rollout finishes — keep polling so the
+    // results appear without a manual refresh.
+    refetchInterval: (query) => (query.state.data ? false : 5_000),
   });
 
   if (isLoading) {

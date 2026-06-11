@@ -6,6 +6,8 @@ import type {
   DataConfig,
   DataPreview,
   DataSourceRecord,
+  DeploymentRecord,
+  DeploymentSpec,
   EnvironmentConfig,
   EnvironmentRecord,
   InspectResponse,
@@ -30,6 +32,37 @@ export class ApiError extends Error {
   }
 }
 
+// Turn a FastAPI error body into a readable message. `detail` may be a plain
+// string, a structured object ({code, message, ...}), or — for 422 validation
+// errors — an array of {loc, msg} items.
+function errorMessage(body: unknown, fallback: string): string {
+  if (!body || typeof body !== "object" || !("detail" in body)) {
+    return typeof body === "string" && body ? body : fallback;
+  }
+  const detail = (body as { detail: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (item && typeof item === "object" && "msg" in item) {
+        const loc = (item as { loc?: unknown }).loc;
+        const field = Array.isArray(loc) ? loc.slice(1).join(".") : "";
+        const msg = String((item as { msg: unknown }).msg);
+        return field ? `${field}: ${msg}` : msg;
+      }
+      return JSON.stringify(item);
+    });
+    if (parts.length) return parts.join("; ");
+  }
+  if (detail && typeof detail === "object" && "message" in detail) {
+    return String((detail as { message: unknown }).message);
+  }
+  try {
+    return JSON.stringify(detail);
+  } catch {
+    return fallback;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
   const res = await fetch(url, {
@@ -48,8 +81,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       body = await res.text();
     }
-    const msg = typeof body === "object" && body && "detail" in body ? String((body as { detail: unknown }).detail) : res.statusText;
-    throw new ApiError(res.status, body, msg);
+    throw new ApiError(res.status, body, errorMessage(body, res.statusText));
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -106,6 +138,18 @@ export const api = {
   runCheckpoints: (id: string) => request<CheckpointRecord[]>(`/runs/${id}/checkpoints`),
   runArtifact: (id: string, name = "validation") =>
     request<ValidationArtifact>(`/runs/${id}/artifact?name=${encodeURIComponent(name)}`),
+
+  // deployments
+  listDeployments: () => request<DeploymentRecord[]>("/deployments"),
+  getDeployment: (id: string) => request<DeploymentRecord>(`/deployments/${id}`),
+  createDeployment: (spec: DeploymentSpec, name?: string) =>
+    request<DeploymentRecord>("/deployments", {
+      method: "POST",
+      body: JSON.stringify({ name, spec }),
+    }),
+  stopDeployment: (id: string) =>
+    request<DeploymentRecord>(`/deployments/${id}/stop`, { method: "POST" }),
+  deploymentEvents: (id: string) => request<RunEvent[]>(`/deployments/${id}/events`),
 
   // checkpoints
   listCheckpoints: (params: { run_id?: string; agent_id?: string } = {}) => {

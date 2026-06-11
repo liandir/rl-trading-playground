@@ -131,6 +131,8 @@ export default function NewRunPage() {
     return envConfig;
   }, [envMode, envId, envs.data, envConfig]);
 
+  const preview = useMutation({ mutationFn: () => api.previewData(dataConfig) });
+
   const launch = useMutation({
     mutationFn: async () => {
       const spec: RunSpec = {
@@ -351,6 +353,32 @@ export default function NewRunPage() {
                   disabled={dataConfig.source === "synthetic" || dataConfig.source === "prepared"}
                 />
               </Field>
+              <div className="md:col-span-2 space-y-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => preview.mutate()}
+                  disabled={preview.isPending}
+                >
+                  {preview.isPending ? "Loading preview…" : "Preview data"}
+                </Button>
+                {preview.data && (
+                  <p className="text-xs text-muted-foreground">
+                    {preview.data.n_steps.toLocaleString()} steps × {preview.data.n_assets} assets (
+                    {preview.data.asset_names.join(", ")})
+                    {preview.data.first_time !== null && preview.data.last_time !== null && (
+                      <>
+                        {" "}
+                        — {new Date(preview.data.first_time * 1000).toLocaleDateString()} to{" "}
+                        {new Date(preview.data.last_time * 1000).toLocaleDateString()}
+                      </>
+                    )}
+                  </p>
+                )}
+                {preview.error && (
+                  <p className="text-xs text-destructive">{(preview.error as Error).message}</p>
+                )}
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

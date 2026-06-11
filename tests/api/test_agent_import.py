@@ -32,6 +32,19 @@ def test_files_browse_lists_ptm(client: TestClient, tmp_path: Path) -> None:
     assert all(e["is_dir"] or e["name"].endswith(".ptm") for e in body["entries"])
 
 
+def test_files_browse_accepts_multiple_extensions(client: TestClient, tmp_path: Path) -> None:
+    ptm = _make_ptm(tmp_path)
+    pt = tmp_path / "legacy.pt"
+    pt.write_bytes(ptm.read_bytes())
+    (tmp_path / "notes.txt").write_text("ignored")
+    r = client.get(f"/files/browse?path={tmp_path}&ext=.ptm,.pt,.pth")
+    assert r.status_code == 200
+    names = [e["name"] for e in r.json()["entries"] if not e["is_dir"]]
+    assert ptm.name in names
+    assert pt.name in names
+    assert "notes.txt" not in names
+
+
 def test_files_browse_rejects_path_outside_root(client: TestClient) -> None:
     r = client.get("/files/browse?path=/etc")
     assert r.status_code in (400, 404)
@@ -112,6 +125,44 @@ def test_import_copies_ptm_and_records_checkpoint(client: TestClient, tmp_path: 
     # A row was added to the checkpoints table tagged "imported".
     cps = client.get(f"/checkpoints?agent_id={agent['id']}").json()
     assert any(cp["tag"] == "imported" for cp in cps)
+
+
+def test_import_preserves_training_data_config(client: TestClient, tmp_path: Path) -> None:
+    ptm = _make_ptm(tmp_path)
+    sidecar = ptm.with_suffix(".meta.json")
+    sidecar.write_text(
+        json.dumps(
+            {
+                "agent_config": AgentConfig(agent_type="ppo", network_preset="tiny").model_dump(),
+                "data_config": DataConfig(source="synthetic", interval=15).model_dump(),
+                "env_config": EnvironmentConfig().model_dump(),
+                "step": 10,
+                "episode": 2,
+                "metric_name": "avg_reward",
+                "metric_value": 0.5,
+                "parent_run_id": None,
+                "saved_at": "2026-05-21T10:00:00Z",
+                "extra": {},
+            }
+        )
+    )
+    r = client.post(
+        "/agents/import",
+        json={
+            "name": "imported-2",
+            "source_path": str(ptm),
+            "config": AgentConfig(agent_type="ppo", network_preset="tiny").model_dump(),
+        },
+    )
+    assert r.status_code == 201, r.text
+    agent = r.json()
+    meta = json.loads(
+        (Path(agent["checkpoint_path"]).parent / "checkpoint.meta.json").read_text()
+    )
+    # Interval compatibility checks rely on data_config surviving the import.
+    assert meta["data_config"]["interval"] == 15
+    assert meta["env_config"] is not None
+    assert meta["episode"] == 2
 
 
 def test_import_rejects_non_ptm(client: TestClient, tmp_path: Path) -> None:
