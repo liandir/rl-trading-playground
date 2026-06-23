@@ -13,11 +13,15 @@ from historical data to live execution.
 Several flavours of multi-asset trading environments are provided. Each module
 documents its own state space, action space, and reward modes in its docstring.
 
-- `generic/` — continuous-action long/short environments with and without
-  leverage.
-- `discrete/` — discrete-action variants including bucketed and hierarchical
-  formulations.
-- `hybrid/` — mixed continuous/discrete environments.
+- `discrete.py` — base discrete-action `MultiCurrencyEnv` and its batched
+  counterpart, on which the variants below build.
+- `generic/` — continuous-action long/short environments (`longshort.py`,
+  `longshort_leverage.py`).
+- `longshort*.py` — discrete-action long/short variants, including bucketed
+  (`longshort_buckets.py`), hierarchical (`longshort_hierarchical.py`), and
+  leveraged hierarchical (`longshort_hierarchical_leverage.py`) formulations.
+- `discrete_buckets.py`, `discrete_log.py`, `discrete_log_buckets.py` — further
+  discrete formulations with log-return and bucketed action spaces.
 - `live.py` — live execution wrapper backed by the Kraken connectors.
 
 ### Agents (`src/rl_trading_playground/agent/`)
@@ -62,6 +66,56 @@ npm install
 cd ..
 ```
 
+## Quickstart
+
+After `uv sync`, the fastest path to a trained agent is a `train_*` notebook in
+[notebooks/](notebooks/). The minimal flow each one follows is:
+
+```python
+import torch
+from rl_trading_playground.data import load_and_align_data, PAIRS, get_field
+from rl_trading_playground.environment.longshort_hierarchical_leverage import (
+    LongShortHierarchicalLeverageEnv,
+    BatchedLongShortHierarchicalLeverageEnv,
+)
+from rl_trading_playground.agent.aac_hierarchical import HierarchicalAACAgent
+
+# 1. Load and align historical OHLCV data (see "Data" below).
+data, times = load_and_align_data(PAIRS, interval=5)
+close = torch.tensor(get_field(data, "close")).T.float()      # (T, N)
+# ...likewise for open / high / low / volume, and a (T,) times tensor.
+
+# 2. Build a batched training environment and a single validation environment.
+shared = dict(N=close.shape[1], C0=1_000, reward_mode="log", device="cpu")
+bat_env = BatchedLongShortHierarchicalLeverageEnv(B=8, **shared)
+env = LongShortHierarchicalLeverageEnv(**shared, save_history=False)
+
+# 3. Build an agent and train on a train/validation split.
+agent = HierarchicalAACAgent(network={"type": "attention_memory_action_value", ...})
+T_train = int(close.shape[0] * 0.9)
+agent.train_on_historical_bat(bat_env, open_t[:T_train], close[:T_train], ...,
+                              n_episodes=3, lr=1e-5)
+agent.save("data/agent/my_run.ptt")
+```
+
+> **Note:** the constructor and `train_on_historical_bat` arguments are
+> abbreviated here — use a notebook for the full, working configuration.
+
+### Data
+
+The notebooks expect Kraken OHLCVT data under `data/`, in either of two forms:
+
+- a preprocessed `data/historical_data0.ptt` tensor bundle (loaded directly), or
+- raw Kraken CSVs under `data/Kraken_OHLCVT/` (downloadable from Kraken's
+  [historical data export](https://support.kraken.com/hc/en-us/articles/360047124832)),
+  which are loaded and aligned on the fly via `load_and_align_data`.
+
+If neither is present the data-loading cell raises `FileNotFoundError`.
+
+> ⚠️ **Live trading:** `environment/live.py` and the `kraken/` connectors can place
+> real orders against a funded Kraken account. Keep API credentials out of the
+> repo, start on paper/testnet, and treat any live run as financially risky.
+
 ## Running the Studio
 
 The installed console command starts both the FastAPI backend and the Next.js
@@ -98,8 +152,12 @@ Press `Ctrl+C` to stop both processes.
 ## Training and Evaluation
 
 Training experiments live in [notebooks/](notebooks/). Each notebook pairs an
-environment with an agent and network configuration. Configuration files for
-batch experiments are kept in [configs/](configs/).
+environment with an agent and network configuration. The `train_*` notebooks
+load historical Kraken data, build a batched environment and agent, train via
+`agent.train_on_historical_bat(...)`, and run a held-out validation rollout. The
+[configs/](configs/) directory holds configuration for the news pipeline
+(`news.toml.example`, `news_aliases.json`); experiment hyperparameters are set
+inline in each notebook.
 
 ## Documentation
 
@@ -126,7 +184,7 @@ src/rl_trading_playground/
 ├── agent/        RL algorithms (AAC, AAQ, PPO and hierarchical / auxiliary / spatiotemporal variants)
 ├── api/          FastAPI backend for the trading studio
 ├── data/         Dataset loading and preprocessing helpers
-├── environment/  Trading environments (discrete, generic, hybrid, live)
+├── environment/  Trading environments (discrete base + long/short variants, generic, live)
 ├── network/      Neural network building blocks and full architectures
 ├── kraken/       Kraken REST and WebSocket connectors for live data and order flow
 ├── news/         News collection, deduplication, and tagging pipeline
