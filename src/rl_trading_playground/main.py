@@ -24,10 +24,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not frontend_dir.is_dir():
         print(f"frontend directory not found: {frontend_dir}", file=sys.stderr)
         return 2
-    if shutil.which("npm") is None:
+    # Resolve npm to its full path: on Windows it is a .CMD script, and
+    # subprocess.Popen with a bare name calls CreateProcess, which does not
+    # consult PATHEXT and would fail with WinError 2.
+    npm = shutil.which("npm")
+    if npm is None:
         print("npm was not found on PATH; install Node.js/npm to run the frontend.", file=sys.stderr)
         return 2
-    if not _ensure_frontend_dependencies(frontend_dir, parser.prog):
+    if not _ensure_frontend_dependencies(frontend_dir, parser.prog, npm):
         return 2
 
     backend_url = f"http://{args.backend_host}:{args.backend_port}"
@@ -60,7 +64,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         str(args.backend_port),
     ]
     frontend_cmd = [
-        "npm",
+        npm,
         "run",
         "dev",
         "--",
@@ -114,7 +118,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _ensure_frontend_dependencies(frontend_dir: Path, prog: str) -> bool:
+def _ensure_frontend_dependencies(frontend_dir: Path, prog: str, npm: str) -> bool:
     """Install frontend deps if the local Next.js binary is missing."""
     if _has_frontend_dependencies(frontend_dir):
         return True
@@ -124,7 +128,7 @@ def _ensure_frontend_dependencies(frontend_dir: Path, prog: str) -> bool:
         return False
 
     print(f"Frontend dependencies are missing; running `npm install` in {frontend_dir}", flush=True)
-    completed = subprocess.run(["npm", "install"], cwd=frontend_dir)
+    completed = subprocess.run([npm, "install"], cwd=frontend_dir)
     if completed.returncode != 0:
         print(
             f"frontend dependency installation failed; fix the npm error above and rerun `{prog}`.",
