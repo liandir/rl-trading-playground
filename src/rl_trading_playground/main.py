@@ -22,33 +22,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     frontend_dir = args.frontend_dir.resolve()
 
     if not frontend_dir.is_dir():
-        print(f"frontend directory not found: {frontend_dir}", file=sys.stderr)
-        return 2
-    # Resolve npm to its full path: on Windows it is a .CMD script, and
-    # subprocess.Popen with a bare name calls CreateProcess, which does not
-    # consult PATHEXT and would fail with WinError 2.
-    npm = shutil.which("npm")
-    if npm is None:
-        print("npm was not found on PATH; install Node.js/npm to run the frontend.", file=sys.stderr)
-        return 2
-    if not _ensure_frontend_dependencies(frontend_dir, parser.prog, npm):
+        return _error(f"frontend directory not found: {frontend_dir}")
+
+    # Locate (installing if necessary) the local Next.js binary. The dev server
+    # is launched from this binary directly rather than via `npm run dev`, so
+    # the launcher is the single source of truth for the host and port.
+    next_bin = _ensure_frontend_dependencies(frontend_dir, parser.prog)
+    if next_bin is None:
         return 2
 
     backend_url = f"http://{args.backend_host}:{args.backend_port}"
     frontend_origin = f"http://{args.frontend_host}:{args.frontend_port}"
-    candidate_origins = [
-        frontend_origin,
-        f"http://localhost:{args.frontend_port}",
-        f"http://127.0.0.1:{args.frontend_port}",
-    ]
-    # 0.0.0.0 is a bind address, not a valid browser origin — drop it when
-    # the user opted into binding the frontend to all interfaces.
-    cors_origins = ",".join(
-        dict.fromkeys(o for o in candidate_origins if "//0.0.0.0:" not in o)
-    )
 
     backend_env = os.environ.copy()
-    backend_env["STUDIO_CORS"] = cors_origins
+    backend_env["STUDIO_CORS"] = _cors_origins(args.frontend_host, args.frontend_port)
 
     frontend_env = os.environ.copy()
     frontend_env["NEXT_PUBLIC_API_URL"] = backend_url
@@ -64,44 +51,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         str(args.backend_port),
     ]
     frontend_cmd = [
-        npm,
-        "run",
+        str(next_bin),
         "dev",
-        "--",
         "--hostname",
         args.frontend_host,
         "--port",
         str(args.frontend_port),
     ]
 
-    processes: list[subprocess.Popen[bytes]] = []
-    stopping = False
-
-    def request_stop(_signum: int, _frame: object) -> None:
-        nonlocal stopping
-        stopping = True
-        _terminate(processes)
-
-    previous_sigint = signal.signal(signal.SIGINT, request_stop)
-    previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
-    try:
-        print(f"Starting backend at {backend_url}", flush=True)
-        backend = subprocess.Popen(backend_cmd, cwd=REPO_ROOT, env=backend_env)
-        processes.append(backend)
-        if stopping:
-            return 0
-
-        print(f"Starting frontend at {frontend_origin}", flush=True)
-        frontend = subprocess.Popen(frontend_cmd, cwd=frontend_dir, env=frontend_env)
-        processes.append(frontend)
-        if stopping:
-            return 0
-
-        return _wait_for_exit(processes, lambda: stopping)
-    finally:
-        signal.signal(signal.SIGINT, previous_sigint)
-        signal.signal(signal.SIGTERM, previous_sigterm)
-        _terminate(processes)
+    return _run_studio(
+        backend=(backend_cmd, REPO_ROOT, backend_env, f"Starting backend at {backend_url}"),
+        frontend=(frontend_cmd, frontend_dir, frontend_env, f"Starting frontend at {frontend_origin}"),
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -118,39 +79,88 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _ensure_frontend_dependencies(frontend_dir: Path, prog: str, npm: str) -> bool:
-    """Install frontend deps if the local Next.js binary is missing."""
-    if _has_frontend_dependencies(frontend_dir):
-        return True
+def _cors_origins(frontend_host: str, frontend_port: int) -> str:
+    """Comma-separated browser origins the backend should allow."""
+    candidates = [
+        f"http://{frontend_host}:{frontend_port}",
+        f"http://localhost:{frontend_port}",
+        f"http://127.0.0.1:{frontend_port}",
+    ]
+    # 0.0.0.0 is a bind address, not a valid browser origin — drop it when the
+    # user opted into binding the frontend to all interfaces. dict.fromkeys
+    # de-duplicates while preserving order.
+    return ",".join(
+        dict.fromkeys(o for o in candidates if "//0.0.0.0:" not in o)
+    )
 
+
+def _ensure_frontend_dependencies(frontend_dir: Path, prog: str) -> Path | None:
+    """Return the local Next.js binary, running `npm install` first if missing.
+
+    Returns the path to the binary on success, or ``None`` (after printing an
+    explanation) on failure.
+    """
+    next_bin = _find_next_binary(frontend_dir)
+    if next_bin is not None:
+        return next_bin
+
+    # npm is only required when dependencies actually need installing.
     if not (frontend_dir / "package.json").exists():
-        print(f"frontend package.json not found: {frontend_dir / 'package.json'}", file=sys.stderr)
-        return False
+        _error(f"frontend package.json not found: {frontend_dir / 'package.json'}")
+        return None
+    npm = shutil.which("npm")
+    if npm is None:
+        _error("npm was not found on PATH; install Node.js/npm to install frontend dependencies.")
+        return None
 
     print(f"Frontend dependencies are missing; running `npm install` in {frontend_dir}", flush=True)
     completed = subprocess.run([npm, "install"], cwd=frontend_dir)
     if completed.returncode != 0:
-        print(
-            f"frontend dependency installation failed; fix the npm error above and rerun `{prog}`.",
-            file=sys.stderr,
-        )
-        return False
+        _error(f"frontend dependency installation failed; fix the npm error above and rerun `{prog}`.")
+        return None
 
-    if not _has_frontend_dependencies(frontend_dir):
-        print(
-            "frontend dependency installation completed, but the local Next.js "
-            "executable is still missing.",
-            file=sys.stderr,
-        )
-        return False
-
-    return True
+    next_bin = _find_next_binary(frontend_dir)
+    if next_bin is None:
+        _error("frontend dependency installation completed, but the local Next.js executable is still missing.")
+    return next_bin
 
 
-def _has_frontend_dependencies(frontend_dir: Path) -> bool:
-    """Whether the local Next.js executable is installed in node_modules/.bin."""
-    bin_dir = frontend_dir / "node_modules" / ".bin"
-    return (bin_dir / "next").exists() or (bin_dir / "next.cmd").exists()
+def _find_next_binary(frontend_dir: Path) -> Path | None:
+    """Path to the locally installed Next.js executable, or ``None`` if absent.
+
+    On Windows the runnable shim is ``next.cmd``; elsewhere it is ``next``.
+    """
+    name = "next.cmd" if os.name == "nt" else "next"
+    candidate = frontend_dir / "node_modules" / ".bin" / name
+    return candidate if candidate.exists() else None
+
+
+def _run_studio(
+    backend: tuple[list[str], Path, dict[str, str], str],
+    frontend: tuple[list[str], Path, dict[str, str], str],
+) -> int:
+    """Start both processes, then wait until one exits or Ctrl+C is received."""
+    processes: list[subprocess.Popen[bytes]] = []
+    stopping = False
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        nonlocal stopping
+        stopping = True
+        _terminate(processes)
+
+    previous_sigint = signal.signal(signal.SIGINT, request_stop)
+    previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
+    try:
+        for cmd, cwd, env, message in (backend, frontend):
+            if stopping:
+                return 0
+            print(message, flush=True)
+            processes.append(subprocess.Popen(cmd, cwd=cwd, env=env))
+        return _wait_for_exit(processes, lambda: stopping)
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        _terminate(processes)
 
 
 def _wait_for_exit(
@@ -188,6 +198,12 @@ def _terminate(processes: list[subprocess.Popen[bytes]]) -> None:
         if process.poll() is None:
             process.kill()
             process.wait()
+
+
+def _error(message: str) -> int:
+    """Print an error to stderr and return the launcher's failure exit code."""
+    print(message, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
